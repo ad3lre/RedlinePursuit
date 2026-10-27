@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { buildCar, buildInterior } from './carModel.js';
 import { clamp, lerp, damp, wrapAngle } from './util.js';
 import { glowTexture } from './textures.js';
+const RIDE = 0.02; // tyre contact height above the road surface (was 0.17 -> cars visibly hovered)
 
 let blobTex = null, blurTex = null;
 const blobMat = () => (blobTex ||= glowTexture('rgba(0,0,0,0.9)', 'rgba(0,0,0,0)', 128));
@@ -86,7 +87,7 @@ export class Car {
   get fwdZ() { return Math.cos(this.yaw); }
 
   place(x, z, yaw, speed = 0) {
-    this.pos.set(x, this.game.world.heightAt(x, z) + 0.17, z);
+    this.pos.set(x, this.game.world.heightAt(x, z) + RIDE, z);
     this.yaw = yaw;
     this.vel.set(Math.sin(yaw) * speed, Math.cos(yaw) * speed);
     this.angVel = 0; this.vy = 0; this.grounded = true; this.prevG = undefined; this.airTime = 0;
@@ -175,7 +176,7 @@ export class Car {
     this.pos.x += ax * dt; this.pos.z += az * dt;
 
     // vertical
-    const g = world.heightAt(this.pos.x, this.pos.z) + 0.17;
+    const g = world.heightAt(this.pos.x, this.pos.z) + RIDE;
     const wasGrounded = this.grounded;
     // slope the car is rolling along (m/s of vertical ground motion)
     const rawSlopeV = this.prevG !== undefined ? clamp((g - this.prevG) / dt, -30, 30) : 0;
@@ -284,7 +285,7 @@ export class Car {
       this.vPitch = dt ? damp(this.vPitch ?? tp, tp, 18, dt) : tp;
       this.vRoll = dt ? damp(this.vRoll ?? tr, tr, 18, dt) : tr;
       const avg = (hFL + hFR + hRL + hRR) / 4;
-      const tl = avg - (this.pos.y - 0.17);
+      const tl = avg - (this.pos.y - RIDE);
       this.vLift = dt ? damp(this.vLift ?? tl, tl, 18, dt) : tl;
       lift = this.vLift;
     } else { this.vPitch = this.pitch; this.vRoll = this.roll; this.vLift = 0; }

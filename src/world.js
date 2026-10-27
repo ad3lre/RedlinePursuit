@@ -141,7 +141,8 @@ export class World {
       const k = j * n + i;
       const x = -WORLD_HALF + i * HF_CELL, z = -WORLD_HALF + j * HF_CELL;
       const h = this.hf.data[k];
-      pos[k * 3] = x; pos[k * 3 + 1] = h; pos[k * 3 + 2] = z;
+      const cdm = Math.max(Math.abs(x), Math.abs(z));
+      pos[k * 3] = x; pos[k * 3 + 1] = h - 0.45 * (1 - smoothstep(612, 660, cdm)); pos[k * 3 + 2] = z; // sunk 45 cm under the city asphalt (kills terrain/plane z-fighting)
       uv[k * 2] = x / 12; uv[k * 2 + 1] = z / 12;
       this.hf.normal(x, z, tmpN);
       const slope = 1 - tmpN.y;

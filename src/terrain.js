@@ -6,6 +6,7 @@ export const CITY_HALF = 600;
 export const STREET_SPACING = 120;
 export const STREET_HALF_W = 10;
 export const WATER_LEVEL = -1.5;
+export const CITY_PLANE = 0.04;
 export const HF_N = 400; // cells per side
 export const HF_CELL = (WORLD_HALF * 2) / HF_N;
 
@@ -112,7 +113,8 @@ export class HeightField {
   // Height of what the player actually drives on: the road ribbon when over one, otherwise terrain.
   // Terrain cells are 10 m wide so they can't follow a 20 m road exactly; this removes wheels sinking into / floating over the asphalt.
   ground(x, z) {
-    const t = this.get(x, z);
+    let t = this.get(x, z);
+    const cd = Math.max(Math.abs(x), Math.abs(z)); if (cd < 650) t += CITY_PLANE * (1 - smoothstep(612, 650, cd)); // city asphalt plane is drawn 4 cm above the terrain
     const arr = this.rgrid && this.rgrid.get(this.rkey(Math.floor(x / this.rcs), Math.floor(z / this.rcs)));
     if (!arr) return t;
     let best = 1e9, bh = 0;
@@ -123,7 +125,7 @@ export class HeightField {
       if (d < best) { best = d; bh = sg.a.h + (sg.b.h - sg.a.h) * u; }
     }
     if (best > 3) return t;
-    const roadY = bh + 0.12;
+    const roadY = bh + 0.13; // ribbon tops sit at +0.10..0.14
     if (best <= 0) return roadY;
     const k = best / 3; return roadY + (t - roadY) * (k * k * (3 - 2 * k));
   }
