@@ -220,9 +220,9 @@ export class Game {
   setupMulti(pl, route) {
     const M = this.multi;
     const me = M.players.find((p) => p.id === M.myId);
-    pl.net = { id: M.myId, owner: M.myId };
+    pl.net = { id: M.myId, owner: M.myId, human: true };
     pl.name = me?.name || 'YOU';
-    this.netSendT = 0;
+    this.netSendT = 0; this.sid = M.sid;
     const rr = this.raceRoute();
     this.botRoute = rr;
     if (route) {
@@ -231,7 +231,12 @@ export class Game {
       for (let i = 1; i <= N; i++) this.checkpoints.push((route.length - 60) * (i / N) + 30);
       this.finishDist = this.checkpoints[N - 1];
     }
-    const total = M.players.length + M.bots;
+    const humans = M.players.filter((p) => p.role !== 'cop'), cops = M.players.filter((p) => p.role === 'cop');
+    // bot count is derived the same way on every client so everyone builds the same grid
+    const BOT_FILL = 4;
+    const nBots = Math.max(0, BOT_FILL - humans.length) + (cops.length ? 0 : 0);
+    this.botCount = nBots;
+    const total = humans.length + nBots;
     const rows = Math.ceil(total / 2);
     const P = {};
     const lane = (k) => (k % 2 ? 3.5 : -3.5);
@@ -241,20 +246,27 @@ export class Game {
       const lat = lane(k);
       car.place(p.x + -p.dz * lat, p.z + p.dx * lat, Math.atan2(p.dx, p.dz), 0);
     };
+    const copBehind = (car, k) => { // cops start behind the grid, side by side
+      const p = pointAtDist(rr, Math.max(6, (route ? 34 : 220) - 26 - Math.floor(k / 2) * 12), P);
+      const lat = lane(k);
+      car.place(p.x + -p.dz * lat, p.z + p.dx * lat, Math.atan2(p.dx, p.dz), 0);
+    };
+    // every player is drawn with the car + default colours THEY chose. No recolouring, ever: what you pick is what everyone sees.
     for (const p of M.players) {
-      if (p.id === M.myId) { placeAt(pl, p.slot); continue; }
+      const isCop = p.role === 'cop';
+      if (M.late && p.id === M.myId && M.late.spawn) { const sp = M.late.spawn; pl.place(sp.x, sp.z, sp.yaw, sp.speed || 0); continue; }
+      if (p.id === M.myId) { if (isCop) copBehind(pl, p.slot); else placeAt(pl, p.slot); continue; }
       const spec = PLAYER_CARS[p.car % PLAYER_CARS.length];
-      const col = p.car === this.carIdx ? RACER_COLORS[(p.slot + 2) % RACER_COLORS.length] : [spec.color, spec.color2];
-      const c = this.addCar(spec, { role: 'racer', name: p.name, color: col[0], color2: col[1] });
+      const c = this.addCar(isCop ? { ...spec, armor: spec.armor * 1.3 } : spec, { role: isCop ? 'cop' : 'racer', police: isCop, name: p.name, color: spec.color, color2: spec.color2, livery: spec.livery });
       c.net = { id: p.id, owner: p.id, human: true };
       c.ai = new RemoteAI(c);
-      c.nitro = 0.6;
-      placeAt(c, p.slot);
+      c.nitro = isCop ? 1 : 0.6;
+      if (isCop) { copBehind(c, p.slot); c.sirenOn = true; this.cops.push(c); } else { placeAt(c, p.slot); this.racers.push(c); }
       this.netCars.set(p.id, c);
-      this.racers.push(c);
     }
-    for (let i = 0; i < M.bots; i++) {
-      const k = M.players.length + i;
+    // bots: model + colours are a pure function of the slot index, so every client renders identical bots
+    for (let i = 0; i < nBots; i++) {
+      const k = humans.length + i;
       const ms = PLAYER_CARS[(i + 1) % PLAYER_CARS.length];
       const col = RACER_COLORS[i % RACER_COLORS.length];
       const rm = RIVAL_MODELS[i % RIVAL_MODELS.length];
@@ -268,9 +280,12 @@ export class Game {
       this.netCars.set(id, c);
       this.racers.push(c);
     }
-    this.racers.push(pl);
+    if (pl.role === 'cop' || pl.police) { /* the local cop is already in this.cops via spawn logic below */ }
+    else this.racers.push(pl);
+    this.expectedRacers = this.racers.length;
     if (!route) this.heat = 1;
   }
+  racerTotal() { return this.multi ? Math.max(1, this.expectedRacers || this.racers.length) : 4; }
   mine(car) { return !this.multi || !car.net || car.net.owner === this.multi.myId; }
   ownedNetCars() {
     const out = [this.player];
@@ -293,6 +308,7 @@ export class Game {
   }
   onNet(m) {
     if (!this.multi) return;
+    if (m.t === 'joinreq' && this.multi.host === this.multi.myId) return this.assignBot(m);
     if (m.t === 's') {
       for (const a of m.cars || []) {
         const c = this.netCars.get(a[0]);
@@ -318,6 +334,23 @@ export class Game {
         const by = m.by && this.netCars.get(m.by);
         this.notify(`${c.name} WRECKED`, by ? `by ${by.name}` : '', '#ffb400');
       }
+    } else if (m.t === 'spike') {
+      const c = this.netCars.get(m.from);
+      const ghost = { pos: new THREE.Vector3(m.x, this.world.heightAt(m.x, m.z), m.z), yaw: m.yaw };
+      this.dropSpike(ghost, null, true, true);
+      if (c && c.pos.distanceTo(this.player.pos) < 200) this.audio.spikes();
+      this.notify('SPIKE STRIP', `${c ? c.name : 'A cop'} laid spikes`, '#3a80ff');
+    } else if (m.t === 'dmg') {
+      // damage addressed to a car this client owns (EMP, takedown hits from remote cops)
+      const c = m.id === this.multi.myId ? this.player : this.netCars.get(m.id);
+      if (!c || !this.mine(c)) return;
+      if (m.kind === 'emp') { c.empTimer = 2.5; if (c === this.player) { this.notify('EMP HIT!', 'A cop fried your electronics', '#ff4040'); this.rig.addShake(0.5); this.hud.flashDamage(0.5); } }
+      if (m.amt) this.damage(c, m.amt, this.netCars.get(m.by) || null);
+    } else if (m.t === 'bust') {
+      // a human racer was busted by a human cop: every client counts it
+      if (m.id !== this.multi.myId && !this.bustSeen?.has(m.id)) { (this.bustSeen ||= new Set()).add(m.id); this.bustedRacers++; this.notify('BUSTED!', `${m.name || 'Racer'} busted (${this.bustedRacers}/${this.racerTotal()})`, '#3aa0ff', true); }
+    } else if (m.t === 'escape') {
+      if (!this.escSeen?.has(m.id)) { (this.escSeen ||= new Set()).add(m.id); this.escapedRacers++; this.notify('RACER ESCAPED', `${m.name || 'Racer'} got away`, '#ff6040'); }
     } else if (m.t === 'gone') {
       for (const [id, c] of [...this.netCars]) {
         if (c.net.owner !== m.from) continue;
@@ -327,6 +360,16 @@ export class Game {
         if (c.net.human) this.notify('PLAYER LEFT', c.name, '#aaaaaa');
       }
     }
+  }
+  // owner hands a bot's slot (car, position, race progress) to a player who pressed START while the session runs
+  assignBot(m) {
+    const bot = [...this.netCars.values()].find((c) => c.net.bot && !c.wrecked && !c.net.taken);
+    if (!bot || !this.multi.net) return;
+    bot.net.taken = m.from;
+    const progress = bot.ai?.progress || 0;
+    this.multi.net.send({ t: 'assign', to: m.from, event: this.multi.event, sid: this.sid, host: this.multi.myId, players: [{ id: m.from, name: m.name, role: m.role, car: m.car, slot: 0 }], spawn: { x: bot.pos.x, z: bot.pos.z, yaw: bot.yaw, speed: bot.speed, progress }, takeBot: bot.net.id });
+    // that bot disappears here: the new player's own car (streamed from their client) replaces it
+    this.netCars.delete(bot.net.id); this.racers = this.racers.filter((x) => x !== bot); this.removeCar(bot);
   }
   netSmooth(dt) {
     const k = 1 - Math.exp(-dt * 9);
@@ -530,7 +573,8 @@ export class Game {
     this.radio(`Roadblock is set up ahead. All units hold position.`);
   }
 
-  dropSpike(cop, target, silent = false) {
+  dropSpike(cop, target, silent = false, remote = false) {
+    if (!remote && this.multi && this.multi.net && cop === this.player) this.multi.net.send({ t: 'spike', x: cop.pos.x, z: cop.pos.z, yaw: cop.yaw });
     const fx = Math.sin(cop.yaw), fz = Math.cos(cop.yaw);
     const x = cop.pos.x - fx * 7, z = cop.pos.z - fz * 7;
     const g = new THREE.Group();
@@ -613,7 +657,7 @@ export class Game {
       if (this.mode === 'cop') {
         this.bustedRacers++;
         if (byPlayer) { this.takedowns++; this.takedownReward(); this.takedownCam(car); }
-        this.notify('BUSTED!', `${car.name} busted (${this.bustedRacers}/4)`, '#3aa0ff', true);
+        this.notify('BUSTED!', `${car.name} busted (${this.bustedRacers}/${this.racerTotal()})`, '#3aa0ff', true);
         this.radio('Suspect is down. Nice work.');
       } else {
         this.notify('RACER WRECKED', `${car.name} is out`, '#ffb400');
@@ -825,6 +869,7 @@ export class Game {
         this.vfx.empBurst(r.pos.x, r.pos.y, r.pos.z);
         this.audio.empFire();
         r.empTimer = 2.5;
+        if (this.multi && r.net && this.multi.net) this.multi.net.send({ t: 'dmg', to: r.net.owner, id: r.net.id, kind: 'emp', amt: 0.3, by: this.multi.myId });
         this.damage(r, 0.3, pl);
         this.notify('EMP HIT!', `${r.name} hit by EMP`, '#40a0ff');
         e.cd = 14; e.lock = 0; e.target = null;
@@ -1134,6 +1179,7 @@ export class Game {
 
   endGame(reason) {
     if (this.state === 'ending' || this.state === 'result') return;
+    if (this.multi && this.multi.net && reason === 'busted') this.multi.net.send({ t: 'bust', id: this.multi.myId, name: this.player.name });
     if (this.multi && this.mode === 'free' && (reason === 'busted' || reason === 'wrecked')) { if (this.respawnT <= 0) this.softFail(reason); return; }
     this.state = 'ending';
     const pl = this.player;
@@ -1141,7 +1187,7 @@ export class Game {
     if (reason === 'busted') { this.audio.busted(); this.notify('BUSTED', 'You were arrested…', '#ff3050', true); this.radio('Suspect is in custody. Good work everyone.'); }
     else if (reason === 'wrecked' || reason === 'wrecked_cop') { this.audio.busted(); this.notify('WRECKED', 'Vehicle wrecked', '#ff3050', true); }
     else if (reason === 'finish') { this.audio.victory(); this.notify(this.playerPlace === 1 ? 'VICTORY!' : `FINISH  P${this.playerPlace}`, fmtTime(this.raceTime), '#30ff90', true); }
-    else if (reason === 'cop_done') { this.audio.victory(); this.notify('EVENT COMPLETE', `Busted ${this.bustedRacers}/4`, '#3aa0ff', true); }
+    else if (reason === 'cop_done') { this.audio.victory(); this.notify('EVENT COMPLETE', `Busted ${this.bustedRacers}/${this.racerTotal()}`, '#3aa0ff', true); }
     // orbit camera on player
     this.rig.startCine({ type: 'orbit', target: () => pl.pos, r: 8, h: 2.2, speed: 0.3, a0: pl.yaw + Math.PI * 0.8 });
     this.audio.music && this.audio.music.setLevel(0);

@@ -66,7 +66,7 @@ export class HUD {
       $('cp').textContent = `CP ${Math.min(g.checkIdx, g.checkpoints.length - 1)}/${g.checkpoints.length - 1}`;
       $('dist').textContent = `${Math.max(0, (g.finishDist - g.playerProgress) / 1000).toFixed(1)} km left`;
     } else if (g.mode === 'cop') {
-      $('busted-num').textContent = `${g.bustedRacers}/4`;
+      $('busted-num').textContent = `${g.bustedRacers}/${g.racerTotal ? g.racerTotal() : 4}`;
       $('cp').textContent = `Escaped ${g.escapedRacers}`;
       $('dist').textContent = '';
     } else {

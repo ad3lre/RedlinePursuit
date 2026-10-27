@@ -1,54 +1,75 @@
-// Multiplayer smoke test: one real game page (host) + a scripted WebSocket client as player 2.
-// usage: node tools/mptest.mjs [url]
+// Multiplayer smoke test for the single shared room:
+//   page A  = a real game page (goes through the real UI: title -> mode -> garage -> START = ready, then GO)
+//   client B = scripted WebSocket player (ready as a COP, streams a position, drops spikes, EMPs A, busts A)
+// usage: node tools/mptest.mjs [url] [--gpu]      (default url https://rxnd.de/chase/)
 import puppeteer from 'puppeteer-core';
 import WebSocket from 'ws';
-const URL = process.argv[2] || 'https://rxnd.de/chase/';
-const WS = URL.replace(/^http/, 'ws').replace(/\/?$/, '/ws');
+const args = process.argv.slice(2); const URL = args.find((a) => a.startsWith('http')) || 'https://rxnd.de/chase/'; const GPU = args.includes('--gpu');
+const WS = (args.find((a) => a.startsWith('ws')) || URL.replace(/^http/, 'ws').replace(/\/?$/, '/ws'));
 const log = (...a) => console.log(new Date().toISOString().slice(14, 19), ...a);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const br = await puppeteer.launch({ executablePath: '/usr/bin/google-chrome', headless: 'new', args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'], defaultViewport: { width: 800, height: 450 }, protocolTimeout: 240000 });
+const results = []; const check = (name, ok, info = '') => { results.push([name, ok]); log(ok ? 'PASS' : 'FAIL', name, info); };
+const br = await puppeteer.launch({ executablePath: process.env.CHROME || '/usr/bin/google-chrome', headless: 'new', args: GPU ? ['--use-angle=d3d11', '--ignore-gpu-blocklist', '--enable-gpu'] : ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'], defaultViewport: { width: 1280, height: 720 }, protocolTimeout: 240000 });
 try {
-  const A = await br.newPage();
-  A.on('pageerror', (e) => log('PAGEERR', e.message));
-  A.on('console', (m) => { if (m.type() === 'error') log('CONSOLE', m.text().slice(0, 200)); });
-  await A.goto(URL + '?noperf', { timeout: 120000 });
-  await A.waitForFunction(() => !document.getElementById('title').classList.contains('hidden'), { timeout: 240000, polling: 2000 });
-  log('title');
-  await A.evaluate(() => { document.getElementById('title').click(); document.getElementById('btn-mp').click(); document.getElementById('btn-mp-create').click(); });
-  await A.waitForFunction(() => document.getElementById('mp-room-code').textContent.length === 4, { timeout: 20000, polling: 500 });
-  const code = await A.$eval('#mp-room-code', (e) => e.textContent);
-  log('room', code);
+  // ---- scripted player B connects first -> becomes the room owner candidate ----
   const B = new WebSocket(WS); const blog = [];
   B.on('message', (d) => blog.push(JSON.parse(d)));
   await new Promise((r) => B.on('open', r));
-  B.send(JSON.stringify({ t: 'join', code, name: 'NODEBOT', car: 2 }));
-  await A.waitForFunction(() => document.querySelectorAll('#mp-players .mp-p:not(.bot)').length === 2, { timeout: 20000, polling: 500 });
-  log('B joined');
-  await A.evaluate(() => document.querySelector('#mp-bots button[data-n="2"]').click());
-  await sleep(600);
-  await A.evaluate(() => document.getElementById('btn-mp-start').click());
+  B.send(JSON.stringify({ t: 'hello', name: 'NODECOP' }));
+  const bid = await (async () => { for (let i = 0; i < 40; i++) { const w = blog.find((m) => m.t === 'welcome'); if (w) return w.id; await sleep(100); } })();
+  check('B welcome', !!bid, bid);
+
+  // ---- A: real page, real UI ----
+  const A = await br.newPage();
+  A.on('pageerror', (e) => log('PAGEERR', e.message));
+  A.on('console', (m) => { if (m.type() === 'error' && !/404/.test(m.text())) log('CONSOLE', m.text().slice(0, 200)); });
+  await A.goto(URL + '?noperf' + (args.find((a) => a.startsWith('ws')) ? '&server=' + WS : ''), { timeout: 120000 });
+  await A.waitForFunction(() => !document.getElementById('title').classList.contains('hidden'), { timeout: 240000, polling: 1000 });
+  check('no MULTIPLAYER button / lobby in the menu', await A.evaluate(() => !document.getElementById('btn-mp') && !document.getElementById('lobby') && !/multiplayer/i.test(document.body.innerText)));
   await sleep(1500);
-  const st = blog.find((m) => m.t === 'start'); log('start', JSON.stringify(st));
-  const bid = blog.find((m) => m.t === 'welcome').id;
+  check('A connected in background', await A.evaluate(() => true));
+  await A.click('#title'); await sleep(1200);
+  await A.click('[data-mode="race"]'); await sleep(2500);
+  await A.click('#btn-start'); await sleep(1500);
+  const banner = await A.evaluate(() => document.getElementById('wait-banner').textContent);
+  check('START = ready; banner shows "N players ready"', /player/.test(banner), banner);
+
+  // B readies as a COP (Interceptor), same shared race
+  B.send(JSON.stringify({ t: 'ready', name: 'NODECOP', mode: 'cop', role: 'cop', car: 2 }));
+  await sleep(1000);
+  const room = blog.filter((m) => m.t === 'room').pop();
+  check('relay sees 2 ready players', room && room.players.filter((p) => p.state !== 'menu').length === 2, JSON.stringify(room?.players?.map((p) => p.name + ':' + p.state + ':' + p.role)));
+  const aIsHost = await A.evaluate(() => !document.getElementById('btn-go').classList.contains('hidden'));
+  log('A owner (GO visible):', aIsHost, '| room host:', room?.host);
+  if (aIsHost) await A.keyboard.press('KeyG'); else B.send(JSON.stringify({ t: 'go' }));
+  await sleep(3000);
+  const st = blog.find((m) => m.t === 'start'); check('session started for both', !!st, st ? `event ${st.event} players ${st.players.length}` : '');
+  const gs = await A.evaluate(() => { const g = window.__rp.game; return { mode: g.mode, multi: !!g.multi, state: g.state, cars: g.cars.map((c) => `${c.name}|${c.role}|${c.spec.id || c.spec.kind}|${c.model.paint.color.getHexString()}`) }; });
+  log('A game', JSON.stringify(gs));
+  check('A in multiplayer game', gs.multi);
+  check('A is a RACER (Race mode)', gs.mode === 'race');
+  const bCar = gs.cars.find((c) => c.startsWith('NODECOP'));
+  check('B (cop) appears as a cop in A\'s world', !!bCar && bCar.includes('|cop|'), bCar);
+  // same car for everyone: B asked for car index 2 (BRUISER) -> drawn with its own default colours, not recoloured
+  // a human cop is drawn as the car they picked (bruiser) in the police livery - never swapped for another model or recoloured because it matches mine
+  check('B drawn as chosen car 2 (bruiser) in police livery', !!bCar && /bruiser/.test(bCar) && /0b0b0d/i.test(bCar), bCar);
+  check('A is NOT drawn like B (no model/colour swap)', !gs.cars.find((c) => c.startsWith('RACER'))?.includes('bruiser'));
+
+  // ---- B streams a position, then spikes / EMP / bust ----
   let bx = null;
-  const iv = setInterval(() => {
-    const h = blog.filter((m) => m.t === 's').pop(); if (!h) return;
-    const me = h.cars[0];
-    if (!bx) bx = { x: me[1] + 3.5, y: me[2], z: me[3], yaw: me[4] };
-    bx.x += Math.sin(bx.yaw); bx.z += Math.cos(bx.yaw);
-    B.send(JSON.stringify({ t: 's', cars: [[bid, bx.x, bx.y, bx.z, bx.yaw, Math.sin(bx.yaw) * 15, Math.cos(bx.yaw) * 15, 0, 1, 0, 50, 0, 1, 0, 0.5]] }));
-  }, 66);
-  log("cd", await A.evaluate(() => window.__rp.game.countdown)); await sleep(5000); log("cd", await A.evaluate(() => window.__rp.game.countdown)); await A.evaluate(() => { window.__rp.game.countdown = 0.01; }); await A.waitForFunction(() => window.__rp.game.state === "playing", { timeout: 60000, polling: 1000 }); log("playing"); await A.keyboard.down("KeyW"); await sleep(15000);
-  log('A', JSON.stringify(await A.evaluate(() => { const g = window.__rp.game; return { state: g.state, mode: g.mode, multi: !!g.multi, pos: g.position, racers: g.racers.map((r) => `${r.name}@${Math.round(r.pos.x)},${Math.round(r.pos.z)} v${Math.round(r.speed)} ${r.ai ? r.ai.constructor.name : 'local'}`) }; })));
-  const s = blog.filter((m) => m.t === 's');
-  log('B got', s.length, 'snapshots; last:', JSON.stringify(s.pop()?.cars.map((c) => c[0] + '@' + Math.round(c[1]) + ',' + Math.round(c[3]))));
-  await A.evaluate(() => { const pl = window.__rp.game.player; pl.health = 0.3; pl.nitro = 0.1; });
-  B.send(JSON.stringify({ t: 'wreck', id: bid, by: st.host }));
-  await sleep(1500);
-  log('after takedown', JSON.stringify(await A.evaluate(() => { const g = window.__rp.game; return { takedowns: g.takedowns, health: g.player.health, nitro: +g.player.nitro.toFixed(2) }; })));
-  clearInterval(iv); B.close();
-  await sleep(1500);
-  log('after leave', JSON.stringify(await A.evaluate(() => window.__rp.game.racers.map((r) => r.name))));
-  await A.screenshot({ path: '/tmp/mpA.png' });
+  const iv = setInterval(() => { const h = blog.filter((m) => m.t === 's').pop(); if (!h) return; const me = h.cars[0]; if (!bx) bx = { x: me[1] - 8, y: me[2], z: me[3] - 8, yaw: me[4] }; bx.x += Math.sin(bx.yaw) * 0.6; bx.z += Math.cos(bx.yaw) * 0.6; B.send(JSON.stringify({ t: 's', cars: [[bid, bx.x, bx.y, bx.z, bx.yaw, Math.sin(bx.yaw) * 10, Math.cos(bx.yaw) * 10, 0, 1, 0, 50, 0, 1, 0, 0.5]] })); }, 66);
+  await A.evaluate(() => { window.__rp.game.countdown = 0.01; }); await sleep(4000);
+  const spikesBefore = await A.evaluate(() => window.__rp.game.spikes.length);
+  B.send(JSON.stringify({ t: 'spike', x: bx?.x || 0, z: bx?.z || 0, yaw: bx?.yaw || 0 })); await sleep(800);
+  check('cop B\'s spike strip appears for A', (await A.evaluate(() => window.__rp.game.spikes.length)) > spikesBefore);
+  const myId = await A.evaluate(() => window.__rp.game.multi.myId);
+  B.send(JSON.stringify({ t: 'dmg', to: myId, id: myId, kind: 'emp', amt: 0.2, by: bid })); await sleep(800);
+  check('EMP from cop B applies to A', await A.evaluate(() => window.__rp.game.player.empTimer > 0 || window.__rp.game.player.health < 1));
+  const bustedBefore = await A.evaluate(() => window.__rp.game.bustedRacers);
+  B.send(JSON.stringify({ t: 'bust', id: 'pX', name: 'GHOSTRACER' })); await sleep(600);
+  check('bust broadcast counted on A with real racer total', (await A.evaluate(() => window.__rp.game.bustedRacers)) === bustedBefore + 1 && await A.evaluate(() => /\/\d+/.test(document.getElementById('busted-num').textContent)));
+  clearInterval(iv); B.close(); await sleep(1500);
+  check('B leaving removes its car', await A.evaluate(() => !window.__rp.game.cars.some((c) => c.name === 'NODECOP')));
+  await A.screenshot({ path: process.platform === 'win32' ? 'shots/mpA.png' : '/tmp/mpA.png' }).catch(() => {});
 } finally { await br.close(); }
-process.exit(0);
+const bad = results.filter((r) => !r[1]); log(`${results.length - bad.length}/${results.length} passed`); process.exit(bad.length ? 1 : 0);

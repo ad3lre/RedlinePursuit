@@ -11,6 +11,7 @@ import { HUD } from './hud.js';
 import { Game, fmtTime } from './game.js';
 import { PLAYER_CARS } from './car.js';
 import { clamp, lerp } from './util.js';
+import { Net } from './net.js';
 import { loadCarAssets } from './carAssets.js';
 import { loadEnvAssets } from './envAssets.js';
 
@@ -91,6 +92,7 @@ async function boot() {
   $('title').classList.remove('hidden');
   app = 'title';
   demoShotT = 0;
+  netConnect();
   requestAnimationFrame(loop);
 }
 
@@ -178,6 +180,7 @@ function loop(now) {
 }
 
 function handleGlobalKeys() {
+  if (input.hit('KeyG') && waiting) goNow();
   const scr = visibleScreen();
   if (app === 'title') {
     if (input.hit('Enter', 'Space', 'PadA', 'PadB', 'PadX', 'PadY', 'PadStart')) enterMenu();
@@ -308,6 +311,8 @@ function enterMenu() {
 }
 function backToMenu() {
   audio.click();
+  if (game.multi) { game.multi = null; }
+  leaveRoom();
   hud.show(false);
   app = 'menu'; show('menu');
   game.start('demo'); demoShotT = 0;
@@ -360,6 +365,10 @@ function garageSpin(dt) {
   }
 }
 function startGame() {
+  if (net.connected && room) { audio.click(); if (!waiting) { waiting = true; sendReady(); } refreshWait(); return; }
+  startLocal();
+}
+function startLocal() {
   audio.click();
   garageCar = null;
   show(null);
@@ -494,6 +503,7 @@ $('btn-settings-back').onclick = () => closeSettings();
 $('car-prev').onclick = () => selectCar(selCar - 1);
 $('car-next').onclick = () => selectCar(selCar + 1);
 $('btn-start').onclick = () => startGame();
+$('btn-go').onclick = () => goNow();
 $('btn-garage-back').onclick = () => backToMenu();
 $('btn-resume').onclick = () => pause(false);
 $('btn-restart').onclick = () => { if (!game.multi) startGame(); };
@@ -501,5 +511,52 @@ $('btn-pause-settings').onclick = () => openSettings('pause');
 $('btn-quit').onclick = () => backToMenu();
 $('btn-retry').onclick = () => startGame();
 $('btn-res-menu').onclick = () => backToMenu();
+
+
+// ---------- shared room (multiplayer) ----------
+// Everyone is in one room. The menu / garage / car picking are the normal single-player screens: START there = "ready".
+// The room owner launches the session with GO (button or G). Until then ready players see "N players ready".
+const net = new Net();
+let mpName = localStorage.getItem('redline-name') || 'RACER' + Math.floor(Math.random() * 900 + 100);
+let room = null, myRole = 'racer', sentReady = false, waiting = false;
+const roleFor = (mode) => (mode === 'cop' ? 'cop' : 'racer');
+function setWait(text) { const e = $('wait-banner'); if (!e) return; e.textContent = text || ''; e.classList.toggle('hidden', !text); }
+function isOwner() { return !!room && room.host === net.id; }
+function readyCount() { return room ? room.players.filter((p) => p.state !== 'menu').length : 0; }
+function refreshWait() {
+  const sb = $('btn-start'); if (sb) sb.textContent = waiting ? 'READY ✓' : 'START';
+  const goBtn = $('btn-go');
+  if (!waiting) { setWait(''); if (goBtn) goBtn.classList.add('hidden'); return; }
+  const n = readyCount();
+  if (isOwner()) { setWait(`${n} player${n === 1 ? '' : 's'} ready — press GO (G) to launch`); if (goBtn) goBtn.classList.remove('hidden'); }
+  else { setWait(`${n} player${n === 1 ? '' : 's'} ready — waiting for the host to launch`); if (goBtn) goBtn.classList.add('hidden'); }
+}
+async function netConnect() {
+  try { await net.connect(); net.send({ t: 'hello', name: mpName }); } catch (e) { /* offline: single player still works, START falls back to a local game */ }
+}
+function sendReady() { sentReady = true; net.send({ t: 'ready', name: mpName, mode: selMode, role: roleFor(selMode), car: selCar }); }
+function leaveRoom() { waiting = false; sentReady = false; net.send({ t: 'menu' }); refreshWait(); }
+function goNow() { if (waiting && isOwner()) net.send({ t: 'go' }); }
+net.on((m) => {
+  if (m.t === 'room') { room = m; if (app === 'garage' || waiting) refreshWait(); }
+  else if (m.t === 'closed') { room = null; if (waiting) { waiting = false; setWait('Disconnected — starting a local game'); startLocal(); } }
+  else if (m.t === 'start') beginSession(m);
+  else if (m.t === 'assign') beginSession(m, true);
+  else if (game && game.multi) game.onNet(m);
+});
+function beginSession(m, late = false) {
+  if (!['garage', 'game', 'paused', 'result', 'menu'].includes(app)) return;
+  waiting = false; refreshWait();
+  audio.init(); audio.settings = settings; audio.applyVolumes();
+  if (audio.music && !audio.music.started) { try { audio.music.start(); } catch (e) { /* */ } }
+  show(null); hud.show(true); app = 'game';
+  const me = m.players.find((p) => p.id === net.id);
+  const mode = m.event === 'free' ? 'free' : (me && me.role === 'cop' ? 'cop' : 'race');
+  selMode = mode; selCar = me ? me.car : selCar;
+  game.start(mode, selCar, { myId: net.id, host: m.host, players: m.players, event: m.event, sid: m.sid, net, late: late ? m : null });
+  rig.setMode(settings.camMode || 0); hud.camLabel(CAM_MODES[rig.modeIndex].label);
+  const n = m.players.length;
+  game.notify('ONLINE', `${n} player${n > 1 ? 's' : ''} in the session`, '#ff3aa0', true);
+}
 
 boot().catch((e) => { console.error(e); $('load-text').textContent = 'Error: ' + e.message; });

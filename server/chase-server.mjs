@@ -10,7 +10,7 @@ import { WebSocketServer } from 'ws';
 const PORT = +process.env.PORT || 3855;
 const HOST = process.env.HOST || '127.0.0.1';
 const MAX = 12;
-const RELAY = new Set(['s', 'wreck', 'spike', 'dmg', 'despawn', 'assign']);
+const RELAY = new Set(['s', 'wreck', 'spike', 'dmg', 'despawn', 'assign', 'bust', 'escape']);
 
 const players = new Map(); // id -> { id, ws, name, state: 'menu'|'ready'|'playing', role, car, mode }
 let session = { running: false, event: 'race', sid: 0 };
@@ -47,6 +47,7 @@ wss.on('connection', (ws) => {
     if (!m || typeof m.t !== 'string') return;
     if (RELAY.has(m.t)) {
       m.from = me.id;
+      if (m.t === 'dmg' && m.to) { const p = players.get(m.to); if (p) send(p.ws, m); return; }
       if (m.t === 'assign') { const p = players.get(m.to); if (p) { p.state = 'playing'; send(p.ws, m); room(); } return; }
       const s = JSON.stringify(m);
       for (const p of players.values()) if (p.id !== me.id && p.state === 'playing') send(p.ws, s);

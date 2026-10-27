@@ -185,6 +185,9 @@ button:focus { outline: none; }
 #pad-badge { position: absolute; right: 20px; bottom: 20px; z-index: 40; font-family: 'Noto Sans JP', sans-serif; font-size: 13px; background: rgba(0,0,0,0.7); border-left: 3px solid var(--acc); padding: 8px 14px; pointer-events: none; opacity: 0; }
 .padhint { font-family: 'Noto Sans JP', sans-serif; font-size: 12px; color: rgba(255,255,255,0.55); margin-top: 10px; }
 @media (max-width: 900px) { #speedo-wrap { transform: scale(0.7); transform-origin: bottom right; } #minimap-wrap { transform: scale(0.7); transform-origin: top right; } }
+#wait-banner { position: fixed; left: 50%; bottom: 120px; transform: translateX(-50%); z-index: 60; padding: 10px 22px; background: rgba(8,10,14,0.82); border: 1px solid var(--line); color: #fff; font: 700 18px Rajdhani, sans-serif; letter-spacing: 0.12em; pointer-events: none; }
+#btn-go { position: fixed; left: 50%; bottom: 60px; transform: translateX(-50%); z-index: 61; min-width: 160px; font-size: 22px; }
+#wait-banner.hidden, #btn-go.hidden { display: none; }
 </style>
 </head>
 <body>
@@ -288,6 +291,8 @@ button:focus { outline: none; }
   <div id="result" class="screen hidden"><div class="panel"><div id="res-title"></div><div id="res-rows"></div>
     <div class="btnrow"><button class="btn" id="btn-res-menu">MENU</button><button class="btn primary" id="btn-retry">RETRY</button></div></div></div>
 </div>
+<div id="wait-banner" class="hidden"></div>
+<button id="btn-go" class="btn primary hidden">GO</button>
 <div id="sound-hint" class="hidden">🔇 Click the screen or press a key to enable sound (browsers may not start audio from a gamepad alone)</div>
 <div id="pad-badge" class="hidden"></div>
 <script src="game.js"></script>
