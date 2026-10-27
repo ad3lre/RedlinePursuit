@@ -10,6 +10,7 @@ import { HUD } from './hud.js';
 import { Game, fmtTime } from './game.js';
 import { PLAYER_CARS } from './car.js';
 import { clamp, lerp } from './util.js';
+import { loadCarAssets } from './carAssets.js';
 
 const $ = (id) => document.getElementById(id);
 const DEFAULTS = { camMode: 0, fov: 65, shake: 0, speedFx: true, centerDot: false, mouseLook: 1, mouseSens: 1, mouseInvY: false, mouseReturn: true, cinematic: true, voice: true, quality: 1, master: 0.8, music: 0.6, sfx: 0.9 };
@@ -70,6 +71,7 @@ window.addEventListener('resize', onResize);
 async function boot() {
   const bar = $('load-bar'), txt = $('load-text');
   await world.build((p, t) => { bar.style.width = `${Math.round(p * 100)}%`; txt.textContent = t; });
+  txt.textContent = 'LOADING CAR MODELS'; await loadCarAssets();
   post = new Post(renderer, scene, camera);
   applyQuality();
   game = new Game({ renderer, scene, camera, world, audio, input, settings, rig, vfx, hud });

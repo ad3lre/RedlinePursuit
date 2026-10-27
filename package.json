@@ -1,0 +1,34 @@
+{
+  "name": "redlinepursuit",
+  "version": "1.0.0",
+  "description": "<div align=\"center\">",
+  "main": "game.js",
+  "scripts": {
+    "build": "node build.mjs",
+    "inspect": "node tools/inspect.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/harukaappscreate/RedlinePursuit.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/harukaappscreate/RedlinePursuit/issues"
+  },
+  "homepage": "https://github.com/harukaappscreate/RedlinePursuit#readme",
+  "dependencies": {
+    "esbuild": "^0.28.2",
+    "three": "^0.160.0"
+  },
+  "devDependencies": {
+    "@gltf-transform/cli": "^4.5.1",
+    "@gltf-transform/core": "^4.5.1",
+    "@gltf-transform/extensions": "^4.5.1",
+    "@gltf-transform/functions": "^4.5.1",
+    "draco3dgltf": "^1.5.9",
+    "meshoptimizer": "^1.3.0",
+    "puppeteer-core": "^23.11.1"
+  }
+}

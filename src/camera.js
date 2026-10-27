@@ -99,7 +99,8 @@ export class CameraRig {
     } else {
       const p = car.model.profile;
       let lx, ly, lz;
-      if (mode === 'cockpit') { lx = 0.38; ly = p.belt + (p.roofH - p.belt) * 0.62; lz = p.roofF - 0.4; fovTarget += 6; }
+      if (mode === 'cockpit' && p.eye) { lx = p.eye.x; ly = p.eye.y; lz = p.eye.z; fovTarget += 6; }
+      else if (mode === 'cockpit') { lx = 0.38; ly = p.belt + (p.roofH - p.belt) * 0.62; lz = p.roofF - 0.4; fovTarget += 6; }
       else { lx = 0; ly = (p.hoodFront || 0.9) + 0.3; lz = p.L / 2 - 0.42; fovTarget += 4; }
       // world pos using yaw + damped pitch, no roll (stable horizon)
       const tp = car.pitch * 0.5 + car.bodyPitch * 0.3;

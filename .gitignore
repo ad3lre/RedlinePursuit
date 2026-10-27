@@ -43,3 +43,4 @@ tmp/
 
 # Note: 'game.js' is the bundled game bundle required for zero-config GitHub Pages hosting.
 # Do NOT ignore game.js unless you switch to an automated GitHub Actions build workflow.
+shots/

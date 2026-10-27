@@ -33,7 +33,7 @@ export class Car {
       color: police ? 0x0b0b0d : opts.color ?? spec.color,
       color2: police ? 0xf2f2f2 : opts.color2 ?? spec.color2,
       livery: police ? 'police' : opts.livery ?? spec.livery ?? 'plain',
-      police, taxi: opts.taxi,
+      police, taxi: opts.taxi, lod: this.role === 'player' ? 'hi' : 'lo',
     });
     game.scene.add(this.model.root);
     this.dims = this.model.dims;
@@ -267,6 +267,6 @@ export class Car {
 
   dispose() {
     this.game.scene.remove(this.model.root);
-    this.model.root.traverse((o) => { if (o.isMesh && o.geometry) o.geometry.dispose(); });
+    this.model.root.traverse((o) => { if (o.isMesh && o.geometry && !this.model.root.userData.sharedGeo) o.geometry.dispose(); });
   }
 }

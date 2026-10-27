@@ -152,3 +152,9 @@ npx esbuild src/main.js --bundle --format=iife --minify --outfile=game.js
 - **GitHub**: [@harukaappscreate](https://github.com/harukaappscreate)
 - **Repository**: [RedlinePursuit](https://github.com/harukaappscreate/RedlinePursuit)
 - **License**: [MIT License](LICENSE)
+
+---
+
+## 🚗 Realistic car assets (work in progress)
+Supercar-class cars (`super` / `gt` / `muscle`) now use real glTF models instead of procedural boxes (`src/carAssets.js`, `src/carModel.js`). Paint shader, liveries, damage, lights and sirens are unchanged. Sedan / SUV / truck are still procedural.
+Build: `npm install && npm run build` (esbuild embeds the `.glb` files into `game.js`). Credits: `assets/CREDITS.md`. Tools: `tools/optimize.mjs`, `tools/inspect.mjs`, `tools/shot.mjs` (headless screenshots).

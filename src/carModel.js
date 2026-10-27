@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { glowTexture, textTexture } from './textures.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { hasGLB, getTemplate } from './carAssets.js';
 
 function mergeByMaterial(group) {
   const byMat = new Map();
@@ -47,6 +48,13 @@ const PROFILES = {
   sedan: { L: 4.7, W: 1.85, roofH: 1.48, belt: 0.95, hoodFront: 0.78, wsBase: 0.85, roofF: 0.25, roofR: -1.1, rearWin: -1.7, deck: 1.0, tail: 0.98, wheelR: 0.34, wb: 1.42, spoiler: false, cabinW: 1.6 },
   suv: { L: 4.8, W: 1.95, roofH: 1.85, belt: 1.15, hoodFront: 1.0, wsBase: 1.0, roofF: 0.5, roofR: -2.1, rearWin: -2.3, deck: 1.8, tail: 1.2, wheelR: 0.42, wb: 1.5, spoiler: false, cabinW: 1.75 },
 };
+
+// kind -> glTF asset + hand-tuned profile (car-space metres, +Z forward, wheelbase centred on 0)
+const GLB_MODELS = {
+  super: { model: 'ferrari', L: 4.53, W: 1.98, roofH: 1.14, belt: 0.82, hoodFront: 0.92, wsBase: 0.55, roofF: -0.05, roofR: -1.0, rearWin: -1.7, deck: 0.98, tail: 0.95, spoiler: false, cabinW: 1.5, eye: { x: 0.36, y: 1.0, z: -0.12 }, head: { x: 0.66, y: 0.66, z: 2.0 }, tailL: { x: 0.68, y: 0.86, z: -2.2 } },
+};
+GLB_MODELS.gt = { ...GLB_MODELS.super };
+GLB_MODELS.muscle = { ...GLB_MODELS.super };
 
 function bodyShape(p) {
   const hl = p.L / 2;
@@ -136,8 +144,75 @@ function sprite(tex, size, color = 0xffffff) {
   return s;
 }
 
+function addPoliceGear(body, p, hl, siren) {
+  const sh = S();
+  // police light bar + decals
+  {
+    const barY = (p.roofH || 1.3) + 0.14;
+    const barZ = ((p.roofF ?? 0) + (p.roofR ?? -1)) / 2;
+    const base = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.1, 0.3), sh.black); base.position.set(0, barY, barZ); body.add(base);
+    const rMat = new THREE.MeshStandardMaterial({ color: 0x400000, emissive: 0xff0000, emissiveIntensity: 0 });
+    const bMat = new THREE.MeshStandardMaterial({ color: 0x000040, emissive: 0x0030ff, emissiveIntensity: 0 });
+    const r = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.12, 0.26), rMat); r.position.set(0.32, barY + 0.08, barZ); body.add(r);
+    const b = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.12, 0.26), bMat); b.position.set(-0.32, barY + 0.08, barZ); body.add(b);
+    const rs = sprite(sh.glowR, 5); rs.position.set(0.35, barY + 0.15, barZ); body.add(rs);
+    const bs = sprite(sh.glowB, 5); bs.position.set(-0.35, barY + 0.15, barZ); body.add(bs);
+    // grille strobes
+    const rs2 = sprite(sh.glowR, 1.5); rs2.position.set(0.3, 0.45, hl + 0.1); body.add(rs2);
+    const bs2 = sprite(sh.glowB, 1.5); bs2.position.set(-0.3, 0.45, hl + 0.1); body.add(bs2);
+    Object.assign(siren, { rMat, bMat, rs, bs, rs2, bs2 });
+    // POLICE text
+    for (const sx of [-1, 1]) {
+      const d = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.4), new THREE.MeshStandardMaterial({ map: sh.policeTex, transparent: true, roughness: 0.4, polygonOffset: true, polygonOffsetFactor: -2 }));
+      d.position.set(sx * (p.W / 2 + 0.005), 0.58, 0.1); d.rotation.y = sx * Math.PI / 2; body.add(d);
+    }
+  }
+}
+
+
+function buildGLBCar(kind, opts) {
+  const sh = S();
+  const cfg = GLB_MODELS[kind];
+  const T = getTemplate(cfg.model, opts.lod === 'lo' ? 'lo' : 'hi') || getTemplate(cfg.model, 'hi');
+  const p = { ...cfg, wheelR: T.wheelR, wb: (T.frontZ - T.rearZ) / 2 };
+  const root = new THREE.Group(); const body = new THREE.Group(); root.add(body);
+  const paint = makePaint(opts.color ?? 0xcc1010, opts.livery || 'plain', opts.color2 ?? 0xffffff);
+  paint.side = THREE.DoubleSide; // lets the cockpit camera see the hood/roof from inside
+  const tailMat = new THREE.MeshStandardMaterial({ color: 0x300000, emissive: 0xff1010, emissiveIntensity: 1.2, transparent: true, opacity: 0.92, roughness: 0.2 });
+  const pick = (mat) => (mat.name === 'Body_Color' ? paint : mat.name === 'Taillight_Glass' ? tailMat : mat);
+  let glassMesh = null;
+  for (const it of T.body) {
+    const m = new THREE.Mesh(it.geo, pick(it.mat)); body.add(m);
+    if (it.mat.name === 'Glass_Gray') glassMesh = m;
+  }
+  const parts = [glassMesh].filter(Boolean);
+  const hl = p.L / 2;
+  const heads = [];
+  for (const sx of [-1, 1]) {
+    const hs = sprite(sh.glowW, 0.9, 0xfff2dd); hs.material.opacity = 0.55; hs.position.set(sx * cfg.head.x, cfg.head.y, cfg.head.z); body.add(hs); heads.push(hs);
+    const ts = sprite(sh.glowR, 0.55); ts.material.opacity = 0.7; ts.position.set(sx * cfg.tailL.x, cfg.tailL.y, cfg.tailL.z); body.add(ts); heads.push(ts);
+  }
+  const siren = {};
+  if (opts.police) addPoliceGear(body, p, hl, siren);
+  if (opts.taxi) {
+    const t = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.22, 0.35), new THREE.MeshStandardMaterial({ color: 0xffdd55, emissive: 0xffcc33, emissiveIntensity: 1.2 }));
+    t.position.set(0, p.roofH + 0.22, (p.roofF + p.roofR) / 2); body.add(t);
+  }
+  const wheels = [];
+  for (const w of T.wheels) {
+    const pivot = new THREE.Group(); pivot.position.set(w.center.x, w.center.y, w.center.z);
+    const spin = new THREE.Group(); pivot.add(spin);
+    for (const it of w.parts) spin.add(new THREE.Mesh(it.geo, opts.police && /rim|wheel/i.test(it.mat.name) ? sh.darkRim : it.mat));
+    root.add(pivot); wheels.push({ pivot, spin, front: w.front, side: w.side });
+  }
+  root.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = false; } });
+  root.userData.sharedGeo = true;
+  return { root, body, wheels, paint, tailMat, heads, siren, dims: { L: p.L, W: p.W, wheelR: p.wheelR, wb: p.wb, roofH: p.roofH }, profile: p, parts, glb: T, glbCfg: cfg };
+}
+
 // kind: super|gt|muscle|sedan|suv|truck ; opts: {color, color2, livery, police, taxi}
 export function buildCar(kind, opts = {}) {
+  if (GLB_MODELS[kind] && hasGLB(GLB_MODELS[kind].model, 'hi')) return buildGLBCar(kind, opts);
   const sh = S();
   const root = new THREE.Group();
   const body = new THREE.Group();
@@ -205,28 +280,8 @@ export function buildCar(kind, opts = {}) {
     heads.push(sp);
     const ts = sprite(sh.glowR, 0.5); ts.material.opacity = 0.7; ts.position.set(sx * (p.W / 2 - 0.3), tailY, -hl - 0.15); body.add(ts); heads.push(ts);
   }
-  // police light bar + decals
   const siren = {};
-  if (opts.police) {
-    const barY = (p.roofH || 1.3) + 0.14;
-    const barZ = ((p.roofF ?? 0) + (p.roofR ?? -1)) / 2;
-    const base = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.1, 0.3), sh.black); base.position.set(0, barY, barZ); body.add(base);
-    const rMat = new THREE.MeshStandardMaterial({ color: 0x400000, emissive: 0xff0000, emissiveIntensity: 0 });
-    const bMat = new THREE.MeshStandardMaterial({ color: 0x000040, emissive: 0x0030ff, emissiveIntensity: 0 });
-    const r = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.12, 0.26), rMat); r.position.set(0.32, barY + 0.08, barZ); body.add(r);
-    const b = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.12, 0.26), bMat); b.position.set(-0.32, barY + 0.08, barZ); body.add(b);
-    const rs = sprite(sh.glowR, 5); rs.position.set(0.35, barY + 0.15, barZ); body.add(rs);
-    const bs = sprite(sh.glowB, 5); bs.position.set(-0.35, barY + 0.15, barZ); body.add(bs);
-    // grille strobes
-    const rs2 = sprite(sh.glowR, 1.5); rs2.position.set(0.3, 0.45, hl + 0.1); body.add(rs2);
-    const bs2 = sprite(sh.glowB, 1.5); bs2.position.set(-0.3, 0.45, hl + 0.1); body.add(bs2);
-    Object.assign(siren, { rMat, bMat, rs, bs, rs2, bs2 });
-    // POLICE text
-    for (const sx of [-1, 1]) {
-      const d = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.4), new THREE.MeshStandardMaterial({ map: sh.policeTex, transparent: true, roughness: 0.4, polygonOffset: true, polygonOffsetFactor: -2 }));
-      d.position.set(sx * (p.W / 2 + 0.005), 0.58, 0.1); d.rotation.y = sx * Math.PI / 2; body.add(d);
-    }
-  }
+  if (opts.police) addPoliceGear(body, p, hl, siren);
   // merge static body meshes per material to cut draw calls
   const merged = mergeByMaterial(body);
   const partsOut = [merged.get(paint), merged.get(sh.glass)].filter(Boolean);
@@ -249,6 +304,7 @@ export function buildCar(kind, opts = {}) {
 
 // Cockpit interior for first person view
 export function buildInterior(model) {
+  if (model.glb) return buildGLBInterior(model);
   const sh = S();
   const p = model.profile;
   const g = new THREE.Group();
@@ -299,4 +355,21 @@ export function buildInterior(model) {
   g.visible = false;
   model.body.add(g);
   return { group: g, wheel };
+}
+
+function buildGLBInterior(model) {
+  // the glTF carries its own cockpit (seats, dash, wheel); just add a steering pivot that turns with the front wheels
+  const T = model.glb;
+  const g = new THREE.Group();
+  let steer = () => {};
+  if (T.steer) {
+    const pivot = new THREE.Group(); pivot.position.copy(T.steer.center);
+    for (const it of T.steer.parts) pivot.add(new THREE.Mesh(it.geo, it.mat));
+    pivot.traverse((o) => { if (o.isMesh) o.castShadow = false; });
+    g.add(pivot);
+    steer = (a) => { pivot.rotation.z = a; };
+  }
+  g.visible = false;
+  model.body.add(g);
+  return { group: g, wheel: { rotation: { set z(v) { steer(v); } } } };
 }
