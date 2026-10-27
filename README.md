@@ -1,160 +1,113 @@
-# 🏎️ REDLINE PURSUIT (レッドライン・パースート)
-
-<div align="center">
+# 🏎️ REDLINE PURSUIT
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Three.js](https://img.shields.io/badge/Three.js-r160-black.svg?logo=three.js)](https://threejs.org/)
-[![Platform](https://img.shields.io/badge/Platform-Web%20%2F%20HTML5%20Canvas-blue.svg)](#)
-[![GitHub Pages](https://img.shields.io/badge/Demo-Play%20Now-brightgreen.svg?logo=github)](https://harukaappscreate.github.io/RedlinePursuit/)
-[![Gamepad](https://img.shields.io/badge/Gamepad-Supported-blueviolet.svg)](#)
 
-**ブラウザで即座に遊べる、スリリングな3Dオープンワールド・ハイウェイ警察チェイスレーシングゲーム！**  
-サーバー不要、インストール不要。PC・Macのブラウザ（Chrome / Edge / Safari）で今すぐプレイ可能。
+**A thrilling 3D open-world highway police-chase racing game that runs right in your browser.**
+No server, no install. Play in Chrome / Edge / Safari on PC or Mac.
 
-[🎮 今すぐブラウザでプレイする (Live Demo)](https://harukaappscreate.github.io/RedlinePursuit/)
-
-</div>
+(English translation of the original Japanese README and UI. Original game by [haruka_apps](https://github.com/harukaappscreate/RedlinePursuit).)
 
 ---
 
-## 📖 目次 (Table of Contents)
-- [🎮 ゲーム概要](#-ゲーム概要)
-- [🔥 ゲームモード](#-ゲームモード)
-- [🕹️ 操作方法 (Controls)](#️-操作方法-controls)
-- [✨ 主な特徴 (Features)](#-主な特徴-features)
-- [🎯 酔い対策・表示設定](#-酔い対策表示設定)
-- [🛠️ ローカル実行・ビルド方法](#️-ローカル実行ビルド方法)
-- [👤 作者・ライセンス](#-作者ライセンス)
+## 🎮 Overview
+
+**REDLINE PURSUIT** is a 3D street-racing and police-chase game rendered with Three.js. Drive across a huge 4 km × 4 km open-world map: break through police blockades with drifts and nitro as a racer, or take the wheel of a patrol car and hunt down illegal racers with EMP and spike strips.
+
+Audio is generated procedurally with the Web Audio API, so there are no large sound files to wait for.
 
 ---
 
-## 🎮 ゲーム概要
+## 🔥 Game modes
 
-**『REDLINE PURSUIT』** は、Three.js を駆使して描画される3Dストリートレース＆ポリスチェイスゲームです。  
-広大な 4km×4km のオープンワールドマップを舞台に、迫り来るパトカーの包囲網をドリフトとニトロで突破するレーサー体験、または警察車両を操り違法レーサーをEMPやスパイクストリップで追いつめるチェイス体験が楽しめます。
+### 1. 🏁 HOT PURSUIT RACE
+Race 3 rival street racers around an ~8.7 km highway circuit while the police close in (heat levels 1–5: backup, roadblocks, spike strips). Shake them off and finish 1st.
 
-Web Audio APIによるプロシージャルサウンド生成エンジンを搭載しており、大容量の外部音源ファイルの読み込みを待つことなく、軽量・高速に起動します。
+### 2. 🚨 INTERCEPTOR
+Play as the police and bust 4 illegal racers. Use **ramming**, **spike strips (`Q` / `LB`)** and **EMP lock-on (hold `E` / `RB`)** to take them down.
 
----
-
-## 🔥 ゲームモード
-
-### 1. 🏁 HOT PURSUIT RACE (ホット・パースート・レース)
-ライバルの違法レーサー3台と約8.7kmのハイウェイ・サーキットで競うモード。  
-追跡してくる警察部隊（ヒートレベル1〜5：増援要請、ロードブロック封鎖、スパイクストリップ設置）の妨害を潜り抜け、1位でのフィニッシュを目指します。
-
-### 2. 🚨 INTERCEPTOR (インターセプター)
-プレイヤーが警察側となり、街にはびこる違法レーサー4台を検挙するモード。  
-パトカー特有の装備である **体当たり**、**スパイクストリップ設置 (`Q` / `LB`)**、**EMPロックオン照射 (`E`長押し / `RB`)** を駆使して目標車両をテイクダウンせよ！
-
-### 3. 🗺️ FREE RUN (フリーラン)
-4km四方の広大なマップを自由にドライブできるオープンワールドモード。  
-巡回中のパトロールカーに見つかると即座にチェイスが開始されます。視界を遮りパトカーを撒いて14秒間逃げ切れば追跡回避成功となり、懸賞金（バウンティ）を獲得できます。
+### 3. 🗺️ FREE RUN
+Roam the 4 km open-world map freely. If a patrol spots you, the chase begins. Break line of sight and stay hidden for 14 seconds to escape and earn a bounty.
 
 ---
 
-## 🕹️ 操作方法 (Controls)
+## 🕹️ Controls
 
-キーボード操作およびゲームパッド（Xbox / PlayStation / 汎用コントローラー）に完全対応しています。
+Keyboard and gamepad (Xbox / PlayStation / generic) are fully supported.
 
-### キーボード操作
-
-| キー | 機能 |
+| Key | Action |
 |:---|:---|
-| <kbd>W</kbd> / <kbd>↑</kbd> | アクセル |
-| <kbd>S</kbd> / <kbd>↓</kbd> | ブレーキ / バック |
-| <kbd>A</kbd> <kbd>D</kbd> / <kbd>←</kbd> <kbd>→</kbd> | ステアリング（左右旋回） |
-| <kbd>SPACE</kbd> | ハンドブレーキ（ドリフト開始） |
-| <kbd>SHIFT</kbd> / <kbd>N</kbd> | ニトロブースト（ドリフト・ニアミス等で蓄積） |
-| <kbd>C</kbd> | 視点切替（三人称近 → 三人称遠 → 運転席コックピット → ボンネット） |
-| <kbd>V</kbd> | 後方確認カメラ（押している間） |
-| マウス | 視点移動（ドラッグ / マウスロック。設定で切替・OFF可） |
-| <kbd>Q</kbd> | 【警察側】後方にスパイクストリップを設置 |
-| <kbd>E</kbd> (長押し) | 【警察側】前方のターゲットにEMP照射 |
-| <kbd>R</kbd> | コース復帰（スタック時のリセット） |
-| <kbd>M</kbd> | BGM オン / オフ |
-| <kbd>ESC</kbd> / <kbd>P</kbd> | ポーズメニュー |
+| <kbd>W</kbd> / <kbd>↑</kbd> | Accelerate |
+| <kbd>S</kbd> / <kbd>↓</kbd> | Brake / reverse |
+| <kbd>A</kbd> <kbd>D</kbd> / <kbd>←</kbd> <kbd>→</kbd> | Steer |
+| <kbd>SPACE</kbd> | Handbrake (start a drift) |
+| <kbd>SHIFT</kbd> / <kbd>N</kbd> | Nitro (charged by drifting, near misses, etc.) |
+| <kbd>C</kbd> | Camera: 3rd person near → far → cockpit → hood |
+| <kbd>V</kbd> | Look behind (hold) |
+| Mouse | Look around (drag or mouse lock; configurable) |
+| <kbd>Q</kbd> | [Police] Deploy spike strip behind you |
+| <kbd>E</kbd> (hold) | [Police] EMP lock-on to the target ahead |
+| <kbd>R</kbd> | Respawn on track |
+| <kbd>M</kbd> | Music on/off |
+| <kbd>ESC</kbd> / <kbd>P</kbd> | Pause |
 
-### マウス視点操作
+### Mouse look
+Choose in **Settings → Mouse look** (default: Drag).
+- **Drag**: hold a mouse button and move to orbit the camera around the car.
+- **Mouse lock**: click the screen to capture the cursor and look around freely. <kbd>ESC</kbd> releases it (and pauses).
+- **OFF**: the mouse doesn't move the camera.
 
-設定画面の **「マウス視点操作」** で以下から選べます（デフォルト: ドラッグ）。
+In first-person views (cockpit / hood) you can turn your head left/right and up/down. Sensitivity, Y-inversion and auto-recenter are configurable.
 
-- **ドラッグ**: マウスボタン（左または右）を押しながら動かすと、車の周りを回り込むように視点が動きます。
-- **マウスロック**: 画面をクリックするとカーソルが固定され、マウスを動かすだけで自由に見回せます。<kbd>ESC</kbd> で解除（同時にポーズ）。
-- **OFF**: マウスで視点を動かしません。
+### Gamepad
+RT accelerate · LT brake · left stick steer · A nitro · X/B handbrake (drift) · Y camera · LB spike strip · RB EMP · D-pad ↓ look behind · START pause · BACK reset.
+Menus: D-pad / left stick to move, **A** confirm, **B** back.
 
-1人称（コックピット / ボンネット）視点では首振りのように左右・上下を見回せます。マウス感度・上下反転・「操作をやめると自動で正面に戻る」も設定できます。
-
-### ゲームパッド操作
-
-- **RT**: アクセル
-- **LT**: ブレーキ
-- **左スティック**: ステアリング
-- **A ボタン**: ニトロブースト
-- **X / B ボタン**: ハンドブレーキ（ドリフト）
-- **Y ボタン**: カメラ視点切替
-- **LB**: スパイクストリップ設置
-- **RB**: EMP照射
-- **方向キー下 (↓)**: 後方確認
-- **START**: ポーズ
-- **BACK (SELECT)**: リセット
-- **メニュー操作**: 十字キー／左スティックでカーソル移動、**A** で決定、**B** で戻る
-
-> [!NOTE]  
-> ブラウザのセキュリティ仕様（AudioContext Autoplay Policy）により、ゲームパッド操作のみでは音声が開始されない場合があります。その場合は画面内を一度クリックするか、キーボードの任意のキーを押してください。
+> [!NOTE]
+> Due to browser autoplay policy, audio may not start with gamepad input alone. Click the screen once or press any key.
 
 ---
 
-## ✨ 主な特徴 (Features)
+## ✨ Features
 
-- **3D物理＆挙動シミュレーション**: ドリフトの滑走感、スリップストリーム、カウンターステア、重量感ある衝突レスポンスを再現。
-- **ヒートレベル＆ダイナミックAI**: 警察車両はプレイヤーを追いつめるため、進路妨害・挟み撃ち・ロードブロック（バリケード）・スパイクストリップを戦略的に仕掛けてきます。
-- **4段階のカメラ視点**: 臨場感あふれる運転席視点から、全体を見渡せる三人称視点まで自由に切り替え可能。
-- **リッチなHUD・UI**: 速度計、タコメーター、ミニマップ、ヒートレベルインジケーター、テイクダウン演出を完備。
-- **完全スタンドアロン**: 外部のアセットサーバーに依存せず、すべての3Dメッシュやエフェクト、オーディオがコードからプロシージャルに生成されます。
-
----
-
-## 🎯 酔い対策・表示設定
-
-3D酔いが起きにくい快適なプレイ環境を提供するため、設定画面（SETTINGS）で細かなチューニングが可能です：
-
-- **カメラのロール補正**: カメラは常に水平を保ち、不要な画面の傾きを抑制。
-- **カメラ揺れ (Camera Shake)**: デフォルトでOFF（お好みに応じてONに切り替え可能）。
-- **画角 (FOV) 調整**: 視界の広さをスライダーで自由に変更可能。
-- **スピードエフェクト**: 高速走行時のブラーや動的FOV変化のON/OFF。
-- **センタードット表示**: 画面中央に視点固定用のドットを表示し、視覚的な酔いを大幅に軽減。
-- **スローモーション演出**: クラッシュ・テイクダウン時の演出切り替え。
+- **3D physics & handling**: drifting, slipstream, counter-steer and weighty collisions.
+- **Heat levels & dynamic AI**: police box you in, set roadblocks and lay spike strips.
+- **4 camera views**: from cockpit to wide third person.
+- **Rich HUD**: speedometer, tachometer, minimap, heat indicator, takedown effects.
+- **Fully standalone**: world, effects and audio are generated from code; only the car models are glTF files, embedded in the bundle.
 
 ---
 
-## 🛠️ ローカル実行・ビルド方法
+## 🎯 Comfort settings
 
-### ローカルで遊ぶ場合
-本プロジェクトは静的ファイルのみで構成されているため、ローカルの `index.html` をダブルクリックしてブラウザで開くだけでプレイできます。
+Tune in **SETTINGS** to reduce motion sickness:
+- **Camera roll stabilisation**: the camera always keeps the horizon level.
+- **Camera shake**: OFF by default.
+- **Field of view** slider.
+- **Speed effects** (blur / dynamic FOV) toggle.
+- **Center dot** to give your eyes a fixed point.
+- **Takedown slow-motion** toggle.
 
-### ソースコードから再ビルドする場合
-`src/` 配下にモジュール化されたソースコード（Three.js r160ベース）が含まれています。コードを変更してビルドし直す場合は以下を実行してください：
+---
+
+## 🛠️ Build
+
+Open `index.html` locally to play, or rebuild from `src/` (Three.js r160 + esbuild):
 
 ```bash
-# 依存パッケージのインストール
-npm install three@0.160.0 esbuild
-
-# バンドル・最小化ビルド（game.jsの生成）
-npx esbuild src/main.js --bundle --format=iife --minify --outfile=game.js
+npm install
+npm run build      # node build.mjs -> game.js (glTF models embedded)
+./deploy.sh        # build and publish to the web folder served at /chase/
 ```
 
+## 🚗 Realistic car assets (work in progress)
+Supercar-class cars (`super` / `gt` / `muscle`) use real glTF models instead of procedural boxes (`src/carAssets.js`, `src/carModel.js`). Paint shader, liveries, damage, lights and sirens are unchanged. Sedan / SUV / truck are still procedural.
+Credits: `assets/CREDITS.md`. Tools: `tools/optimize.mjs`, `tools/inspect.mjs`, `tools/shot.mjs` (headless screenshots).
+
 ---
 
-## 👤 作者・ライセンス
+## 👤 Author & license
 
 - **Developer**: haruka_apps
-- **GitHub**: [@harukaappscreate](https://github.com/harukaappscreate)
 - **Repository**: [RedlinePursuit](https://github.com/harukaappscreate/RedlinePursuit)
 - **License**: [MIT License](LICENSE)
-
----
-
-## 🚗 Realistic car assets (work in progress)
-Supercar-class cars (`super` / `gt` / `muscle`) now use real glTF models instead of procedural boxes (`src/carAssets.js`, `src/carModel.js`). Paint shader, liveries, damage, lights and sirens are unchanged. Sedan / SUV / truck are still procedural.
-Build: `npm install && npm run build` (esbuild embeds the `.glb` files into `game.js`). Credits: `assets/CREDITS.md`. Tools: `tools/optimize.mjs`, `tools/inspect.mjs`, `tools/shot.mjs` (headless screenshots).

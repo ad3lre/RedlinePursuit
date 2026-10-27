@@ -338,7 +338,7 @@ export class Game {
       this.dropSpike(fake, null, true);
     }
     this.roadblocks.push(rb);
-    this.notify('ROADBLOCK AHEAD', '前方に検問！隙間を抜けろ', '#ff4040');
+    this.notify('ROADBLOCK AHEAD', 'Roadblock ahead! Find the gap', '#ff4040');
     this.radio(`Roadblock is set up ahead. All units hold position.`);
   }
 
@@ -359,7 +359,7 @@ export class Game {
     g.position.set(x, y, z); g.rotation.y = cop.yaw;
     this.scene.add(g);
     this.spikes.push({ mesh: g, x, z, yaw: cop.yaw, t: 25, hit: new Set() });
-    if (!silent && target === this.player) { this.notify('SPIKE STRIP', 'スパイクストリップ設置！', '#ff4040'); this.radio('Spike strip deployed!'); }
+    if (!silent && target === this.player) { this.notify('SPIKE STRIP', 'Spike strip deployed!', '#ff4040'); this.radio('Spike strip deployed!'); }
   }
 
   // ---------------- events ----------------
@@ -414,7 +414,7 @@ export class Game {
     if (car.role === 'cop') {
       if (byPlayer) {
         this.takedowns++; this.bounty += 2500; pl.nitro = Math.min(1, pl.nitro + 0.35);
-        this.notify('TAKEDOWN!', 'パトカー撃破  +2500', '#ff3060', true);
+        this.notify('TAKEDOWN!', 'Patrol car down  +2500', '#ff3060', true);
         this.radio(['Unit down! Unit down!', 'We lost a unit!', 'Officer down, requesting backup!'][Math.floor(Math.random() * 3)]);
         this.takedownCam(car);
       }
@@ -422,10 +422,10 @@ export class Game {
       if (this.mode === 'cop') {
         this.bustedRacers++;
         if (byPlayer) { this.takedowns++; pl.nitro = Math.min(1, pl.nitro + 0.4); this.takedownCam(car); }
-        this.notify('BUSTED!', `${car.name} を摘発 (${this.bustedRacers}/4)`, '#3aa0ff', true);
+        this.notify('BUSTED!', `${car.name} busted (${this.bustedRacers}/4)`, '#3aa0ff', true);
         this.radio('Suspect is down. Nice work.');
       } else {
-        this.notify('RACER WRECKED', `${car.name} がリタイア`, '#ffb400');
+        this.notify('RACER WRECKED', `${car.name} is out`, '#ffb400');
         if (byPlayer) { this.takedowns++; pl.nitro = Math.min(1, pl.nitro + 0.3); this.takedownCam(car); }
       }
     }
@@ -598,7 +598,7 @@ export class Game {
       pl.place(n.x, n.z, Math.atan2(m.x - n.x, m.z - n.z), 0);
     }
     this.rig.snap = true;
-    this.notify('RESET', 'リセット', '#aaaaaa');
+    this.notify('RESET', 'Reset', '#aaaaaa');
   }
 
   copAbilities(dt) {
@@ -607,7 +607,7 @@ export class Game {
     e.cd = Math.max(0, e.cd - dt);
     if (input.hit('KeyQ', 'PadLB') && this.spikeCd <= 0) {
       this.dropSpike(pl, null, true); this.spikeCd = 12; this.audio.spikes();
-      this.notify('SPIKE STRIP', '後方にスパイク設置', '#3aa0ff');
+      this.notify('SPIKE STRIP', 'Spikes deployed behind', '#3aa0ff');
     }
     // EMP: hold E to lock onto racer ahead
     const holding = input.k('KeyE', 'PadRB');
@@ -629,7 +629,7 @@ export class Game {
         this.audio.empFire();
         r.empTimer = 2.5;
         this.damage(r, 0.3, pl);
-        this.notify('EMP HIT!', `${r.name} にEMP命中`, '#40a0ff');
+        this.notify('EMP HIT!', `${r.name} hit by EMP`, '#40a0ff');
         e.cd = 14; e.lock = 0; e.target = null;
       }
     } else { e.lock = Math.max(0, e.lock - dt * 2); if (!holding) e.target = null; }
@@ -668,7 +668,7 @@ export class Game {
           r.ai.finished = true; this.finished.push(r);
           if (this.mode === 'cop') {
             this.escapedRacers++;
-            this.notify('RACER ESCAPED', `${r.name} が逃走に成功`, '#ff6040');
+            this.notify('RACER ESCAPED', `${r.name} got away`, '#ff6040');
           }
         }
       }
@@ -762,7 +762,7 @@ export class Game {
           this.pursuit = false; this.escapes++;
           const bonus = 3000 * this.heat;
           this.bounty += bonus;
-          this.notify('ESCAPED!', `逃走成功  +${bonus}`, '#30ff90', true);
+          this.notify('ESCAPED!', `Escaped  +${bonus}`, '#30ff90', true);
           this.audio.victory();
           this.radio('We lost the suspect. All units return to patrol.');
           for (const c of [...this.cops]) if (c.pos.distanceTo(pl.pos) > 100 || true) { c.sirenOn = false; c.ai.target = null; c.ai.retire = true; }
@@ -774,7 +774,7 @@ export class Game {
           // dispatch: a witness reported the player
           this.pursuit = true; this.lastSeen = -20; this.pursuitTime = 0; this.cooldown = 0;
           for (const k of active) if (k.ai.patrol) { k.ai.patrol = false; k.sirenOn = true; k.ai.target = pl; }
-          this.notify('PURSUIT!', '通報により追跡開始', '#ff3050', true);
+          this.notify('PURSUIT!', 'Pursuit started — you were reported', '#ff3050', true);
           this.radio(`Dispatch, we have a report of a street racer near ${this.areaName(pl)}. All units respond.`);
         }
         // patrols
@@ -789,7 +789,7 @@ export class Game {
           if (sees && (pl.speed > 22 || d < 25)) {
             this.pursuit = true; this.lastSeen = 0; this.pursuitTime = 0;
             for (const k of patrols) { k.ai.patrol = false; k.sirenOn = true; k.ai.target = pl; }
-            this.notify('PURSUIT!', '追跡開始！逃げ切れ', '#ff3050', true);
+            this.notify('PURSUIT!', 'Pursuit started! Get away', '#ff3050', true);
             this.radio(`Suspect spotted heading ${this.headingWord(pl)} through ${this.areaName(pl)}. In pursuit!`);
             break;
           }
@@ -811,7 +811,7 @@ export class Game {
       // heat change notifications
       if (this.heat !== this.lastHeat) {
         if (this.lastHeat !== undefined && this.heat > this.lastHeat) {
-          this.notify(`HEAT LEVEL ${this.heat}`, ['', '', '応援パトカー接近', 'ロードブロック展開開始', '重装甲SUV出動', '全車両出動'][this.heat], '#ff4040');
+          this.notify(`HEAT LEVEL ${this.heat}`, ['', '', 'Backup units approaching', 'Roadblocks deploying', 'Armored SUVs dispatched', 'All units responding'][this.heat], '#ff4040');
           this.radio(['', '', 'Requesting backup!', 'Setting up roadblocks!', 'Sending in the heavies!', 'All units, maximum pursuit authorized!'][this.heat]);
         }
         this.lastHeat = this.heat;
@@ -890,8 +890,8 @@ export class Game {
           c.flatTimer = 9;
           this.damage(c, 0.22, null);
           this.vfx.sparks(c.pos.x, c.pos.y, c.pos.z, 0, 0, 30, 1);
-          if (c === this.player) { this.audio.spikes(); this.notify('SPIKED!', 'タイヤがパンク！', '#ff3030'); this.rig.addShake(0.6); this.hud.flashDamage(0.6); }
-          else if (c.pos.distanceTo(this.player.pos) < 150) { this.audio.spikes(); if (this.mode === 'cop') this.notify('SPIKED!', `${c.name} がスパイクを踏んだ`, '#3aa0ff'); }
+          if (c === this.player) { this.audio.spikes(); this.notify('SPIKED!', 'Tires punctured!', '#ff3030'); this.rig.addShake(0.6); this.hud.flashDamage(0.6); }
+          else if (c.pos.distanceTo(this.player.pos) < 150) { this.audio.spikes(); if (this.mode === 'cop') this.notify('SPIKED!', `${c.name} hit the spikes`, '#3aa0ff'); }
         }
       }
     }
@@ -940,10 +940,10 @@ export class Game {
     this.state = 'ending';
     const pl = this.player;
     this.result = { reason, time: this.raceTime, place: this.playerPlace || this.position, takedowns: this.takedowns, bounty: Math.round(this.bounty), maxSpeed: this.maxSpeed * 3.6, busted: this.bustedRacers, escaped: this.escapedRacers, escapes: this.escapes, heat: this.heat };
-    if (reason === 'busted') { this.audio.busted(); this.notify('BUSTED', '逮捕された…', '#ff3050', true); this.radio('Suspect is in custody. Good work everyone.'); }
-    else if (reason === 'wrecked' || reason === 'wrecked_cop') { this.audio.busted(); this.notify('WRECKED', '車両大破', '#ff3050', true); }
-    else if (reason === 'finish') { this.audio.victory(); this.notify(this.playerPlace === 1 ? 'VICTORY!' : `FINISH  ${this.playerPlace}位`, fmtTime(this.raceTime), '#30ff90', true); }
-    else if (reason === 'cop_done') { this.audio.victory(); this.notify('EVENT COMPLETE', `摘発 ${this.bustedRacers}/4`, '#3aa0ff', true); }
+    if (reason === 'busted') { this.audio.busted(); this.notify('BUSTED', 'You were arrested…', '#ff3050', true); this.radio('Suspect is in custody. Good work everyone.'); }
+    else if (reason === 'wrecked' || reason === 'wrecked_cop') { this.audio.busted(); this.notify('WRECKED', 'Vehicle wrecked', '#ff3050', true); }
+    else if (reason === 'finish') { this.audio.victory(); this.notify(this.playerPlace === 1 ? 'VICTORY!' : `FINISH  P${this.playerPlace}`, fmtTime(this.raceTime), '#30ff90', true); }
+    else if (reason === 'cop_done') { this.audio.victory(); this.notify('EVENT COMPLETE', `Busted ${this.bustedRacers}/4`, '#3aa0ff', true); }
     // orbit camera on player
     this.rig.startCine({ type: 'orbit', target: () => pl.pos, r: 8, h: 2.2, speed: 0.3, a0: pl.yaw + Math.PI * 0.8 });
     this.audio.music && this.audio.music.setLevel(0);

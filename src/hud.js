@@ -51,7 +51,7 @@ export class HUD {
   }
   flashDamage(a) { this.dmgFlash = Math.max(this.dmgFlash, a); }
   camLabel(text) {
-    const c = $('camlabel'); c.textContent = '視点: ' + text; c.classList.remove('rfade'); void c.offsetWidth; c.classList.add('rfade');
+    const c = $('camlabel'); c.textContent = 'Camera: ' + text; c.classList.remove('rfade'); void c.offsetWidth; c.classList.add('rfade');
   }
 
   update(dt, g, camera, world, settings) {
@@ -64,22 +64,22 @@ export class HUD {
     if (g.mode === 'race') {
       $('pos-num').textContent = g.position || '-';
       $('cp').textContent = `CP ${Math.min(g.checkIdx, g.checkpoints.length - 1)}/${g.checkpoints.length - 1}`;
-      $('dist').textContent = `残り ${Math.max(0, (g.finishDist - g.playerProgress) / 1000).toFixed(1)} km`;
+      $('dist').textContent = `${Math.max(0, (g.finishDist - g.playerProgress) / 1000).toFixed(1)} km left`;
     } else if (g.mode === 'cop') {
       $('busted-num').textContent = `${g.bustedRacers}/4`;
-      $('cp').textContent = `逃走 ${g.escapedRacers}`;
+      $('cp').textContent = `Escaped ${g.escapedRacers}`;
       $('dist').textContent = '';
     } else {
       $('bounty-num').textContent = Math.round(g.bounty).toLocaleString();
-      $('cp').textContent = g.pursuit ? `追跡 ${fmtTime(g.pursuitTime)}` : g.cooldown > 0 ? 'クールダウン中' : 'パトロール警戒';
-      $('dist').textContent = `逃走成功 ${g.escapes}回`;
+      $('cp').textContent = g.pursuit ? `Pursuit ${fmtTime(g.pursuitTime)}` : g.cooldown > 0 ? 'Cooling down' : 'Patrols on alert';
+      $('dist').textContent = `Escapes: ${g.escapes}`;
     }
     // heat
     const heatEl = $('heat');
     if (g.mode !== 'cop') {
       const bars = heatEl.querySelectorAll('.hb');
       bars.forEach((b, i) => b.classList.toggle('on', i < g.heat && g.pursuit));
-      $('heat-label').textContent = g.pursuit ? (g.mode === 'free' && g.lastSeen > 2 ? `見失い中… ${Math.max(0, 14 - g.lastSeen).toFixed(0)}` : 'PURSUIT') : g.mode === 'free' ? 'UNDETECTED' : 'STANDBY';
+      $('heat-label').textContent = g.pursuit ? (g.mode === 'free' && g.lastSeen > 2 ? `Losing them… ${Math.max(0, 14 - g.lastSeen).toFixed(0)}` : 'PURSUIT') : g.mode === 'free' ? 'UNDETECTED' : 'STANDBY';
       heatEl.classList.toggle('active', g.pursuit);
       heatEl.classList.toggle('evade', g.mode === 'free' && g.pursuit && g.lastSeen > 2);
     }

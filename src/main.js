@@ -81,7 +81,7 @@ async function boot() {
   game.start('demo');
   for (let i = 0; i < 3; i++) { game.update(1 / 60); }
   renderer.compile(scene, camera);
-  bar.style.width = '100%'; txt.textContent = '準備完了';
+  bar.style.width = '100%'; txt.textContent = 'READY';
   await new Promise((r) => setTimeout(r, 250));
   $('loading').classList.add('hidden');
   $('title').classList.remove('hidden');
@@ -123,7 +123,7 @@ function loop(now) {
     if (perfT > 8) {
       perfChecked = true;
       const fps = perfN / perfT;
-      if (fps < 38 && settings.quality > 0) { settings.quality--; applyQuality(); saveSettings(); game.notify('画質を自動調整', `平均 ${Math.round(fps)} FPS → 品質「${['低', '中', '高'][settings.quality]}」`, '#aaaaaa'); }
+      if (fps < 38 && settings.quality > 0) { settings.quality--; applyQuality(); saveSettings(); game.notify('Graphics auto-adjusted', `Avg ${Math.round(fps)} FPS → quality "${['Low', 'Medium', 'High'][settings.quality]}"`, '#aaaaaa'); }
     }
   }
   time += dt;
@@ -283,7 +283,7 @@ document.addEventListener('pointerup', (e) => { const r = e.target.closest && e.
 const unlockAudio = () => { if (audio.ready && audio.ctx.state === 'suspended') audio.ctx.resume(); };
 window.addEventListener('pointerdown', unlockAudio);
 window.addEventListener('keydown', unlockAudio);
-window.addEventListener('gamepadconnected', (e) => { const g = $('pad-badge'); g.textContent = '🎮 ゲームパッド接続: 十字キー/スティックで選択・Aで決定・Bで戻る'; g.classList.remove('hidden'); g.classList.remove('rfade'); void g.offsetWidth; g.classList.add('rfade'); });
+window.addEventListener('gamepadconnected', (e) => { const g = $('pad-badge'); g.textContent = '🎮 Gamepad connected: D-pad/stick to select, A to confirm, B to go back'; g.classList.remove('hidden'); g.classList.remove('rfade'); void g.offsetWidth; g.classList.add('rfade'); });
 
 // ---------- UI flow ----------
 function show(id) { for (const p of ['title', 'menu', 'garage', 'pause', 'result', 'settings', 'controls']) $(p).classList.toggle('hidden', p !== id); if (id) delete navIdx[id]; document.querySelectorAll('.pad-focus').forEach((e) => e.classList.remove('pad-focus')); }
@@ -309,7 +309,7 @@ function enterGarage(mode) {
   selMode = mode; audio.click();
   app = 'garage'; show('garage');
   $('garage-mode').textContent = { race: 'HOT PURSUIT RACE', cop: 'INTERCEPTOR', free: 'FREE RUN' }[mode];
-  $('garage-sub').textContent = { race: 'レーサーとして参戦。追ってくる警察を振り切り1位でゴールせよ。', cop: '警察として出動。違法レーサー4台を全員摘発せよ。', free: '広大なマップを自由に走行。パトロールに見つかったら逃げ切れ。' }[mode];
+  $('garage-sub').textContent = { race: 'Join as a racer. Shake off the police and finish 1st.', cop: 'Roll out as the police. Bust all 4 illegal racers.', free: 'Roam the huge map freely. If a patrol spots you, escape.' }[mode];
   game.clear();
   audio.silence();
   selectCar(selCar);
@@ -324,7 +324,7 @@ function selectCar(i) {
   game.player = null;
   $('car-name').textContent = (selMode === 'cop' ? 'POLICE ' : '') + spec.name;
   $('car-desc').textContent = spec.desc;
-  const stats = [['最高速', spec.top / 96], ['加速', spec.accel / 19], ['ハンドリング', (spec.grip * spec.steer) / 9.5], ['耐久・体当たり', spec.armor * spec.mass / 2.2]];
+  const stats = [['Top speed', spec.top / 96], ['Acceleration', spec.accel / 19], ['Handling', (spec.grip * spec.steer) / 9.5], ['Durability / Ramming', spec.armor * spec.mass / 2.2]];
   $('car-stats').innerHTML = stats.map(([n, v]) => `<div class="st"><span>${n}</span><div class="sb"><i style="width:${Math.round(clamp(v, 0.1, 1) * 100)}%"></i></div></div>`).join('') + `<div class="st topspeed"><span>TOP SPEED</span><b>${Math.round(spec.top * 3.6)} km/h</b></div>`;
   $('car-idx').textContent = `${selCar + 1} / ${PLAYER_CARS.length}`;
   audio.hover();
@@ -390,15 +390,15 @@ window.addEventListener('contextmenu', (e) => { if (app === 'game') e.preventDef
 function showResult(r) {
   if (app !== 'game') return;
   app = 'result'; show('result');
-  const title = { finish: r.place === 1 ? 'VICTORY' : `${r.place}位 フィニッシュ`, busted: 'BUSTED', wrecked: 'WRECKED', wrecked_cop: 'WRECKED', cop_done: 'EVENT COMPLETE' }[r.reason] || 'RESULT';
+  const title = { finish: r.place === 1 ? 'VICTORY' : `P${r.place} FINISH`, busted: 'BUSTED', wrecked: 'WRECKED', wrecked_cop: 'WRECKED', cop_done: 'EVENT COMPLETE' }[r.reason] || 'RESULT';
   const good = r.reason === 'finish' || r.reason === 'cop_done';
   $('res-title').textContent = title;
   $('res-title').className = good ? 'good' : 'bad';
   const rows = [];
-  if (selMode === 'race') { rows.push(['順位', r.reason === 'finish' ? `${r.place} / 4` : 'リタイア'], ['タイム', fmtTime(r.time)]); }
-  if (selMode === 'cop') { rows.push(['摘発', `${r.busted} / 4`], ['逃走されたレーサー', r.escaped], ['タイム', fmtTime(r.time)]); const medal = r.busted >= 4 ? 'GOLD' : r.busted >= 3 ? 'SILVER' : r.busted >= 2 ? 'BRONZE' : '-'; rows.push(['評価', medal]); }
-  if (selMode === 'free') { rows.push(['バウンティ', r.bounty.toLocaleString()], ['逃走成功', r.escapes], ['走行時間', fmtTime(r.time)], ['最大ヒート', r.heat]); }
-  rows.push(['テイクダウン', r.takedowns], ['最高速度', `${Math.round(r.maxSpeed)} km/h`]);
+  if (selMode === 'race') { rows.push(['Position', r.reason === 'finish' ? `${r.place} / 4` : 'DNF'], ['Time', fmtTime(r.time)]); }
+  if (selMode === 'cop') { rows.push(['Busted', `${r.busted} / 4`], ['Racers escaped', r.escaped], ['Time', fmtTime(r.time)]); const medal = r.busted >= 4 ? 'GOLD' : r.busted >= 3 ? 'SILVER' : r.busted >= 2 ? 'BRONZE' : '-'; rows.push(['Rating', medal]); }
+  if (selMode === 'free') { rows.push(['Bounty', r.bounty.toLocaleString()], ['Escapes', r.escapes], ['Drive time', fmtTime(r.time)], ['Max heat', r.heat]); }
+  rows.push(['Takedowns', r.takedowns], ['Top speed', `${Math.round(r.maxSpeed)} km/h`]);
   $('res-rows').innerHTML = rows.map(([a, b]) => `<div class="rr"><span>${a}</span><b>${b}</b></div>`).join('');
 }
 
@@ -406,21 +406,21 @@ function showResult(r) {
 function buildSettings() {
   const el = $('settings-body');
   const opts = [
-    { k: 'camMode', label: '初期視点', type: 'sel', vals: CAM_MODES.map((m, i) => [i, m.label]) },
-    { k: 'fov', label: '視野角 (FOV)', type: 'range', min: 55, max: 90, step: 1 },
-    { k: 'shake', label: 'カメラ揺れ', type: 'sel', vals: [[0, 'OFF'], [1, '弱'], [2, '強']] },
-    { k: 'speedFx', label: 'スピードエフェクト (ブラー/FOV変化)', type: 'bool' },
-    { k: 'centerDot', label: '酔い止めセンタードット', type: 'bool' },
-    { k: 'mouseLook', label: 'マウス視点操作', type: 'sel', vals: [[0, 'OFF'], [1, 'ドラッグ'], [2, 'マウスロック']] },
-    { k: 'mouseSens', label: 'マウス感度', type: 'range', min: 0.2, max: 3, step: 0.1 },
-    { k: 'mouseInvY', label: 'マウス上下反転', type: 'bool' },
-    { k: 'mouseReturn', label: 'マウス視点を自動で正面に戻す', type: 'bool' },
-    { k: 'cinematic', label: 'テイクダウン演出 (スローモーション)', type: 'bool' },
-    { k: 'voice', label: '警察無線ボイス (英語)', type: 'bool' },
-    { k: 'quality', label: 'グラフィック品質', type: 'sel', vals: [[0, '低'], [1, '中'], [2, '高']] },
-    { k: 'master', label: 'マスター音量', type: 'range', min: 0, max: 1, step: 0.05 },
-    { k: 'music', label: 'BGM音量', type: 'range', min: 0, max: 1, step: 0.05 },
-    { k: 'sfx', label: '効果音音量', type: 'range', min: 0, max: 1, step: 0.05 },
+    { k: 'camMode', label: 'Default camera', type: 'sel', vals: CAM_MODES.map((m, i) => [i, m.label]) },
+    { k: 'fov', label: 'Field of view (FOV)', type: 'range', min: 55, max: 90, step: 1 },
+    { k: 'shake', label: 'Camera shake', type: 'sel', vals: [[0, 'OFF'], [1, 'Low'], [2, 'High']] },
+    { k: 'speedFx', label: 'Speed effects (blur / FOV change)', type: 'bool' },
+    { k: 'centerDot', label: 'Anti-nausea center dot', type: 'bool' },
+    { k: 'mouseLook', label: 'Mouse look', type: 'sel', vals: [[0, 'OFF'], [1, 'Drag'], [2, 'Mouse lock']] },
+    { k: 'mouseSens', label: 'Mouse sensitivity', type: 'range', min: 0.2, max: 3, step: 0.1 },
+    { k: 'mouseInvY', label: 'Invert mouse Y', type: 'bool' },
+    { k: 'mouseReturn', label: 'Auto-recenter mouse view', type: 'bool' },
+    { k: 'cinematic', label: 'Takedown cinematic (slow motion)', type: 'bool' },
+    { k: 'voice', label: 'Police radio voice', type: 'bool' },
+    { k: 'quality', label: 'Graphics quality', type: 'sel', vals: [[0, 'Low'], [1, 'Medium'], [2, 'High']] },
+    { k: 'master', label: 'Master volume', type: 'range', min: 0, max: 1, step: 0.05 },
+    { k: 'music', label: 'Music volume', type: 'range', min: 0, max: 1, step: 0.05 },
+    { k: 'sfx', label: 'SFX volume', type: 'range', min: 0, max: 1, step: 0.05 },
   ];
   el.innerHTML = '';
   for (const o of opts) {
@@ -480,4 +480,4 @@ $('btn-quit').onclick = () => backToMenu();
 $('btn-retry').onclick = () => startGame();
 $('btn-res-menu').onclick = () => backToMenu();
 
-boot().catch((e) => { console.error(e); $('load-text').textContent = 'エラー: ' + e.message; });
+boot().catch((e) => { console.error(e); $('load-text').textContent = 'Error: ' + e.message; });

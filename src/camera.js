@@ -3,10 +3,10 @@ import * as THREE from 'three';
 import { damp, dampAngle, clamp, lerp, wrapAngle } from './util.js';
 
 export const CAM_MODES = [
-  { id: 'chase', label: '3人称 (近)' },
-  { id: 'far', label: '3人称 (遠)' },
-  { id: 'cockpit', label: '1人称 (コックピット)' },
-  { id: 'hood', label: '1人称 (ボンネット)' },
+  { id: 'chase', label: '3rd person (near)' },
+  { id: 'far', label: '3rd person (far)' },
+  { id: 'cockpit', label: '1st person (cockpit)' },
+  { id: 'hood', label: '1st person (hood)' },
 ];
 
 const v1 = new THREE.Vector3(), v2 = new THREE.Vector3();

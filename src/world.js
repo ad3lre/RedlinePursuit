@@ -21,34 +21,34 @@ export class World {
   }
 
   async build(progress = () => {}) {
-    progress(0.02, '道路網を生成中…');
+    progress(0.02, 'Generating road network…');
     await nextFrame();
     this.net = buildRoads();
-    progress(0.08, '地形を生成中…');
+    progress(0.08, 'Generating terrain…');
     await nextFrame();
     this.hf.build(this.net.roads);
     this.nav = buildNav(this.net);
-    progress(0.25, '空と光を設定中…');
+    progress(0.25, 'Setting up sky and lighting…');
     await nextFrame();
     this.buildSky();
-    progress(0.32, '地形メッシュを構築中…');
+    progress(0.32, 'Building terrain mesh…');
     await nextFrame();
     this.buildTerrain();
     this.buildFarLand();
     this.buildWater();
-    progress(0.45, 'ハイウェイを舗装中…');
+    progress(0.45, 'Paving highways…');
     await nextFrame();
     this.buildRoadMeshes();
-    progress(0.58, 'ダウンタウンを建設中…');
+    progress(0.58, 'Building downtown…');
     await nextFrame();
     this.buildCity();
-    progress(0.75, '森と岩を配置中…');
+    progress(0.75, 'Placing forests and rocks…');
     await nextFrame();
     this.buildNature();
-    progress(0.85, 'ミニマップを描画中…');
+    progress(0.85, 'Drawing minimap…');
     await nextFrame();
     this.buildMinimap();
-    progress(0.9, 'シェーダーをコンパイル中…');
+    progress(0.9, 'Compiling shaders…');
     await nextFrame();
   }
 
