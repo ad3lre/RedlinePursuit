@@ -1,0 +1,13 @@
+// Cheap scene-cost probe (no screenshot): places the player on the highway, renders a few frames, prints triangles / draw calls / textures.
+import puppeteer from 'puppeteer-core'; import http from 'http'; import fs from 'fs'; import path from 'path';
+const srv = http.createServer((q, r) => { const u0 = decodeURIComponent(q.url.split('?')[0]); const p = u0 === '/' ? '/index.html' : u0; const f = path.join(process.cwd(), p); if (!fs.existsSync(f)) { r.statusCode = 404; return r.end(); } r.setHeader('content-type', f.endsWith('.js') ? 'text/javascript' : 'text/html'); fs.createReadStream(f).pipe(r); }).listen(8775);
+const br = await puppeteer.launch({ executablePath: '/usr/bin/google-chrome', headless: 'new', args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'], protocolTimeout: 240000 });
+const pg = await br.newPage(); pg.on('pageerror', (e) => console.log('[pageerror]', e.message, (e.stack||'').split('\n').slice(0,4).join(' | ')));
+await pg.evaluateOnNewDocument(() => localStorage.setItem('redline-settings', JSON.stringify({ quality: 1 })));
+const t0 = Date.now(); await pg.goto('http://localhost:8775/?noperf' + (process.env.Q || '')); await pg.waitForFunction('window.__rp', { timeout: 200000 }); console.log('boot ms', Date.now() - t0);
+console.log(await pg.evaluate(() => { const { game, world, renderer, scene, camera, post } = window.__rp; game.start('free', 0); for (let i = 0; i < 3; i++) game.update(1 / 60);
+  const p = world.net.loop.pts[300], q = world.net.loop.pts[302]; game.player.place(p.x, p.z, Math.atan2(q.x - p.x, q.z - p.z), 30); game.update(1 / 60);
+  const pl = game.player; camera.position.set(pl.pos.x - Math.sin(pl.yaw) * 8, pl.pos.y + 3, pl.pos.z - Math.cos(pl.yaw) * 8); camera.lookAt(pl.pos.x, pl.pos.y + 1, pl.pos.z); camera.updateMatrixWorld(); world.updateSun(pl.pos); world.update(0.016, 1); renderer.info.reset(); renderer.render(scene, camera); const i = renderer.info;
+  return JSON.stringify({ triangles: i.render.triangles, calls: i.render.calls, geometries: i.memory.geometries, textures: i.memory.textures, hiChunks: (world.treeChunks || []).filter((c) => c.state === 1).length }); }));
+if (process.argv[2]) { await pg.evaluate(() => { const { game, world, rig } = window.__rp; game.state = 'playing'; const p = world.net.loop.pts[300], q = world.net.loop.pts[302]; game.player.place(p.x, p.z, Math.atan2(q.x - p.x, q.z - p.z), 0); rig.snap = true; }); await pg.click('body').catch(() => {}); await new Promise((r) => setTimeout(r, 25000)); await pg.screenshot({ path: process.argv[2] }); }
+await br.close(); srv.close();

@@ -76,7 +76,7 @@ export class Car {
     this.accelLong = 0; this.accelLat = 0;
     this.normal = new THREE.Vector3(0, 1, 0);
     this.lastImpact = 0;
-    this.gear = 1; this.rpm = 0.2;
+    this.gear = 1; this.rpm = 0.2; this.shiftTimer = 0;
     this.sirenPhase = Math.random() * 10;
     this.active = true;
     this.visible = true;
@@ -210,13 +210,25 @@ export class Car {
     if (this.empTimer > 0) this.empTimer -= dt;
     this.wheelSpin += (vF / this.dims.wheelR) * dt;
     // gear/rpm model
+    // hysteresis: upshift at the ratio limit, downshift a bit below it (no gear hunting)
     const ratios = [0, 16, 29, 42, 56, 71, 999];
-    let gear = 1; while (gear < 6 && Math.abs(vF) > ratios[gear]) gear++;
-    if (gear !== this.gear) { this.shifted = gear > this.gear ? 1 : -1; this.gear = gear; }
+    const av = Math.abs(vF);
+    let gear = this.gear || 1;
+    while (gear < 6 && av > ratios[gear]) gear++;
+    while (gear > 1 && av < ratios[gear - 1] * 0.86) gear--;
+    if (gear !== this.gear) {
+      this.shifted = gear > this.gear ? 1 : -1;
+      this.shiftTimer = gear > this.gear ? 0.3 : 0.2; // clutch-in time: revs hang then settle
+      this.gear = gear;
+    }
+    if (this.shiftTimer > 0) this.shiftTimer -= dt;
     const lo = ratios[gear - 1], hi = Math.min(ratios[gear], spec.top * 1.2);
-    const tr = clamp((Math.abs(vF) - lo) / (hi - lo), 0, 1);
+    const tr = clamp((av - lo) / (hi - lo), 0, 1);
     const targetRpm = this.grounded ? 0.25 + tr * 0.72 : 0.95 * (inp.throttle || 0.4);
-    this.rpm = damp(this.rpm, Math.max(targetRpm, inp.throttle > 0 && sp < 3 ? 0.55 : 0.18), 12, dt);
+    const shifting = this.shiftTimer > 0;
+    // on throttle the revs fall slowly during an upshift and snap up on a downshift blip
+    const lam = shifting ? (this.shifted > 0 ? 4.5 : 16) : (targetRpm > this.rpm ? 11 : 6);
+    this.rpm = damp(this.rpm, Math.max(targetRpm, inp.throttle > 0 && sp < 3 ? 0.55 : 0.18), lam, dt);
   }
 
   collideStatic() {

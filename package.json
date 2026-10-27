@@ -20,7 +20,8 @@
   "homepage": "https://github.com/harukaappscreate/RedlinePursuit#readme",
   "dependencies": {
     "esbuild": "^0.28.2",
-    "three": "^0.160.0"
+    "three": "^0.160.0",
+    "ws": "^8.22.0"
   },
   "devDependencies": {
     "@gltf-transform/cli": "^4.5.1",

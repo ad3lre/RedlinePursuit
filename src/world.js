@@ -8,6 +8,7 @@ import { buildRoads, buildNav, LOOP_HALF_W } from './roads.js';
 import { StaticWorld } from './collision.js';
 import { mulberry32, makeNoise2D, fbm, smoothstep, clamp, nextFrame } from './util.js';
 import * as TX from './textures.js';
+import { ENV } from './envAssets.js';
 
 export const globalUniforms = { time: { value: 0 } };
 
@@ -113,6 +114,7 @@ export class World {
   }
 
   updateSun(target) {
+    this.focus = target;
     const dl = this.sunLight;
     // snap to texel grid to avoid shimmering
     const snap = (2 * 110) / 2048;
@@ -128,6 +130,7 @@ export class World {
     const pos = new Float32Array(n * n * 3);
     const col = new Float32Array(n * n * 3);
     const uv = new Float32Array(n * n * 2);
+    const splat = new Float32Array(n * n * 4); // grass, rock, sand, meadow
     const nz = makeNoise2D(55), nz2 = makeNoise2D(66);
     const tmpN = new THREE.Vector3();
     const cGrass1 = new THREE.Color(0.26, 0.34, 0.12), cGrass2 = new THREE.Color(0.5, 0.44, 0.22), cGrass3 = new THREE.Color(0.18, 0.28, 0.1);
@@ -154,6 +157,13 @@ export class World {
       if (h < WATER_LEVEL) c.copy(cWet);
       if (Math.abs(x) < 640 && Math.abs(z) < 640) c.lerp(cCity, 0.5);
       col[k * 3] = c.r; col[k * 3 + 1] = c.g; col[k * 3 + 2] = c.b;
+      // material weights: rock on steep / high ground, sand on the coast, meadow on dry lowland patches, grass elsewhere
+      let wr = Math.max(smoothstep(0.1, 0.28, slope), smoothstep(150, 215, h)), ws = x > 1300 ? 1 - smoothstep(1.0, 7, h) : 0;
+      if (h < WATER_LEVEL + 1.2) ws = Math.max(ws, 0.9);
+      let wm = smoothstep(0.35, 0.8, g) * (1 - wr) * (1 - ws) * 0.9;
+      let wg = Math.max(0, 1 - wr - ws - wm);
+      const wsum = wr + ws + wm + wg || 1;
+      splat[k * 4] = wg / wsum; splat[k * 4 + 1] = wr / wsum; splat[k * 4 + 2] = ws / wsum; splat[k * 4 + 3] = wm / wsum;
     }
     const idx = [];
     for (let j = 0; j < n - 1; j++) for (let i = 0; i < n - 1; i++) {
@@ -164,10 +174,31 @@ export class World {
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
     geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    geo.setAttribute('aSplat', new THREE.BufferAttribute(splat, 4));
     geo.setIndex(idx);
     geo.computeVertexNormals();
-    const detail = TX.grassDetailTexture();
-    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, map: detail, roughness: 0.95, metalness: 0 });
+    const P = ENV.pbr;
+    for (const k of ['grass', 'rock', 'sand', 'meadow']) for (const t of [P[k].map, P[k].normalMap, P[k].roughnessMap]) t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 });
+    mat.onBeforeCompile = (sh) => {
+      const u = { Gd: P.grass.map, Gn: P.grass.normalMap, Rd: P.rock.map, Rn: P.rock.normalMap, Sd: P.sand.map, Sn: P.sand.normalMap, Md: P.meadow.map, Mn: P.meadow.normalMap };
+      for (const [k, v] of Object.entries(u)) sh.uniforms['t' + k] = { value: v };
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec4 aSplat; varying vec4 vSplat; varying vec2 vWxz; varying float vDist;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvSplat = aSplat; vWxz = position.xz; vDist = 0.0;');
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+        varying vec4 vSplat; varying vec2 vWxz; uniform sampler2D tGd, tGn, tRd, tRn, tSd, tSn, tMd, tMn;
+        vec3 trip(sampler2D t, float sc){ vec3 a = texture2D(t, vWxz / sc).rgb; vec3 b = texture2D(t, vWxz / (sc * 5.3) + 0.37).rgb; return a * (0.65 + 0.7 * dot(b, vec3(0.333))); }
+        vec3 tripN(sampler2D t, float sc){ return texture2D(t, vWxz / sc).xyz * 2.0 - 1.0; }`)
+        .replace('#include <color_fragment>', `#include <color_fragment>
+        vec3 tg = trip(tGd, 3.2), tr = trip(tRd, 5.0), ts = trip(tSd, 4.0), tm = trip(tMd, 3.0);
+        vec3 texC = tg * vSplat.x + tr * vSplat.y + ts * vSplat.z + tm * vSplat.w;
+        float texL = max(dot(texC, vec3(0.333)), 0.02);
+        // keep the hand-tuned vertex palette (hue, snow, dirt near roads) and take luminance + micro contrast from the real textures
+        float rel = clamp(texL / 0.30, 0.35, 2.0);
+        diffuseColor.rgb = vColor * pow(rel, 1.25) * 1.15 * mix(vec3(1.0), texC / texL, 0.8);`)
+        .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        { vec3 dn = tripN(tGn, 3.2) * vSplat.x + tripN(tRn, 5.0) * vSplat.y + tripN(tSn, 4.0) * vSplat.z + tripN(tMn, 3.0) * vSplat.w;
+          normal = normalize(normal + vec3(dn.x, 0.0, dn.y) * 0.9); }`);
+    };
     const mesh = new THREE.Mesh(geo, mat);
     mesh.receiveShadow = true;
     this.scene.add(mesh);
@@ -261,10 +292,30 @@ export class World {
   buildRoadMeshes() {
     const hwTex = TX.roadTexture(3, true);
     const cnTex = TX.roadTexture(2, false);
+    const A = ENV.pbr.asphalt; for (const t of [A.normalMap, A.roughnessMap, A.map]) { t.wrapS = t.wrapT = THREE.RepeatWrapping; }
+    // the painted road canvas keeps lane markings; real asphalt detail (grain, cracks, normal, roughness) is multiplied in by a second UV set tiled in world metres
+    const asphaltPatch = (mat, tile) => {
+      mat.onBeforeCompile = (sh) => {
+        sh.uniforms.tAsDiff = { value: A.map }; sh.uniforms.tAsNor = { value: A.normalMap }; sh.uniforms.tAsRough = { value: A.roughnessMap };
+        sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec2 vAsUv;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvAsUv = vec2(position.x + position.z * 0.37, position.z - position.x * 0.21) / ' + tile.toFixed(1) + ';');
+        sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec2 vAsUv; uniform sampler2D tAsDiff, tAsNor, tAsRough;')
+          .replace('#include <map_fragment>', `#include <map_fragment>
+          vec3 asD = texture2D(tAsDiff, vAsUv).rgb; vec3 asD2 = texture2D(tAsDiff, vAsUv * 0.173 + 0.31).rgb;
+          float asL = dot(asD, vec3(0.333)) * 1.9; float asL2 = dot(asD2, vec3(0.333)) * 1.9;
+          float asPaint = smoothstep(0.55, 0.8, max(diffuseColor.r, max(diffuseColor.g, diffuseColor.b)));
+          diffuseColor.rgb *= mix(clamp(asL * mix(0.8, 1.2, asL2 * 0.5), 0.45, 1.5), clamp(0.8 + asL * 0.25, 0.7, 1.15), asPaint);`)
+          .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = clamp(texture2D(tAsRough, vAsUv).g * 0.35 + 0.62, 0.45, 1.0);')
+          .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+          { vec3 an = texture2D(tAsNor, vAsUv).xyz * 2.0 - 1.0; normal = normalize(normal + (tbn_fake(an)) * 0.55); }`)
+          .replace('void main() {', 'vec3 tbn_fake(vec3 n){ return vec3(n.x, 0.0, n.y); }\nvoid main() {');
+      };
+    };
     const hwMat = new THREE.MeshStandardMaterial({ map: hwTex, roughness: 0.78, metalness: 0.0, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
     const cnMat = new THREE.MeshStandardMaterial({ map: cnTex, roughness: 0.8, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
+    asphaltPatch(hwMat, 6); asphaltPatch(cnMat, 6);
     const rpTex = TX.roadTexture(1, false);
     const rampMat = new THREE.MeshStandardMaterial({ map: rpTex, roughness: 0.8, polygonOffset: true, polygonOffsetFactor: -0.8, polygonOffsetUnits: -0.8 });
+    asphaltPatch(rampMat, 6);
     const shoulderMat = new THREE.MeshStandardMaterial({ color: 0x4a4238, roughness: 1, polygonOffset: true, polygonOffsetFactor: -0.5, polygonOffsetUnits: -0.5 });
     for (const r of this.net.roads) {
       const hw = r.kind === 'highway';
@@ -400,8 +451,8 @@ export class World {
     const rnd = mulberry32(2024);
     const scene = this.scene;
     // ground asphalt
-    const aTex = TX.asphaltTexture(); aTex.repeat.set(1224 / 14, 1224 / 14);
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(1224, 1224), new THREE.MeshStandardMaterial({ map: aTex, roughness: 0.75, color: 0xb0b0b0 }));
+    const AS = ENV.pbr.asphalt; for (const t of [AS.map, AS.normalMap, AS.roughnessMap]) { t.repeat.set(1224 / 7, 1224 / 7); t.wrapS = t.wrapT = THREE.RepeatWrapping; }
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(1224, 1224), new THREE.MeshStandardMaterial({ map: AS.map, normalMap: AS.normalMap, normalScale: new THREE.Vector2(0.9, 0.9), roughnessMap: AS.roughnessMap, roughness: 1, color: 0xd0d0d0 }));
     ground.rotation.x = -Math.PI / 2; ground.position.y = 0.04; ground.receiveShadow = true;
     scene.add(ground);
 
@@ -448,9 +499,9 @@ export class World {
       blocks.push({ cx, cz, type, d });
     }
     const bs = S - W * 2; // block size (100)
-    const concTex = TX.concreteTexture(); concTex.repeat.set(bs / 4, bs / 4);
+    const CN = ENV.pbr.concrete; const concTex = CN.map; concTex.repeat.set(bs / 6, bs / 6); for (const t of [CN.normalMap, CN.roughnessMap]) { t.repeat.set(bs / 6, bs / 6); t.wrapS = t.wrapT = THREE.RepeatWrapping; } concTex.wrapS = concTex.wrapT = THREE.RepeatWrapping;
     const slabGeo = new THREE.BoxGeometry(bs, 0.3, bs); slabGeo.translate(0, 0.15, 0);
-    const slabMat = new THREE.MeshStandardMaterial({ map: concTex, roughness: 0.9 });
+    const slabMat = new THREE.MeshStandardMaterial({ map: concTex, normalMap: CN.normalMap, roughnessMap: CN.roughnessMap, roughness: 1 });
     const slabs = new THREE.InstancedMesh(slabGeo, slabMat, blocks.length);
     const grassMat = new THREE.MeshStandardMaterial({ color: 0x3e5a24, roughness: 1 });
     const parkTops = [];
@@ -553,6 +604,52 @@ export class World {
     bim.castShadow = true; bim.receiveShadow = false;
     scene.add(bim);
 
+    if (!location.search.includes('nodetail')) // ---- architectural detail layer (instanced): roof cornice + parapet, ground-floor plinth, corner piers, rooftop plant ----
+    {
+      const dm = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.8, metalness: 0.05 });
+      const dark = new THREE.MeshStandardMaterial({ color: 0x4a4e52, roughness: 0.6, metalness: 0.5 });
+      const box = (w, h, d, y) => { const g = new THREE.BoxGeometry(w, h, d); g.translate(0, y, 0); return g; };
+      const cornice = new THREE.InstancedMesh(mergeGeometries([box(1.04, 0.012, 1.04, 0.995), box(1.0, 0.02, 1.0, 1.0)]), dm, bldg.length); // scaled by building (unit box) below
+      const plinth = new THREE.InstancedMesh(box(1.015, 1, 1.015, 0.5), dm, bldg.length);
+      const hvac = [], pipes = [], piers = [];
+      const cm = new THREE.Matrix4(), cc = new THREE.Color(), tmpV = new THREE.Vector3(), tq = new THREE.Quaternion(), ts = new THREE.Vector3();
+      let n = 0, nPl = 0;
+      bldg.forEach((b, i) => {
+        if (b.style > 0.99 || b.h < 6) return;
+        const top = b.y + b.h;
+        // cornice: overhanging slab + parapet wall, ~0.9 m tall regardless of building height
+        cm.makeScale(b.w * 1.0, 0.9, b.d * 1.0).setPosition(b.x, top - 0.9 * 0.0, b.z);
+        // unit-geometry has height 1 at y 0.995..1.0 -> rebuild with absolute size instead
+        tmpV.set(b.x, top + 0.45, b.z); ts.set(b.w * 1.03, 0.9, b.d * 1.03); cm.compose(tmpV, tq.identity(), ts);
+        cornice.setMatrixAt(n, cm); cc.set(b.color).multiplyScalar(0.8); cornice.setColorAt(n, cc); n++;
+        if (b.y < 1) { // ground-floor plinth band
+          tmpV.set(b.x, 0.3 + 1.1, b.z); ts.set(b.w * 1.012, 2.2, b.d * 1.012); cm.compose(tmpV, tq.identity(), ts);
+          plinth.setMatrixAt(nPl, cm); cc.set(b.color).multiplyScalar(0.55); plinth.setColorAt(nPl, cc); nPl++;
+          // vertical corner piers on larger buildings give the facade rhythm
+          if (b.h > 28 && b.style < 0.7) for (const sx of [-1, 1]) for (const sz of [-1, 1]) piers.push({ x: b.x + sx * b.w * 0.5, z: b.z + sz * b.d * 0.5, h: b.h, c: b.color });
+        }
+        // rooftop plant on flat tops
+        if (b.w > 14 && b.d > 14 && b.h < 150) {
+          const r = ((b.seed * 9301 + 49297) % 233280) / 233280;
+          const cnt = 1 + Math.floor(r * 3);
+          for (let k = 0; k < cnt; k++) { const a = ((b.seed * 77 + k * 31.7) % 1), a2 = ((b.seed * 131 + k * 17.3) % 1); hvac.push({ x: b.x + (a - 0.5) * b.w * 0.6, z: b.z + (a2 - 0.5) * b.d * 0.6, y: top, w: 2.4 + a * 3, d: 2 + a2 * 3, h: 1.4 + r * 1.2 }); }
+        }
+      });
+      cornice.count = n; plinth.count = nPl;
+      for (const im of [cornice, plinth]) { im.castShadow = true; im.receiveShadow = true; im.instanceMatrix.needsUpdate = true; if (im.instanceColor) im.instanceColor.needsUpdate = true; im.computeBoundingSphere(); scene.add(im); }
+      if (hvac.length) { // rooftop AC blocks with a fan stack
+        const unit = mergeGeometries([box(1, 1, 1, 0.5), (() => { const g = new THREE.CylinderGeometry(0.28, 0.28, 0.5, 10); g.translate(0.15, 1.25, 0.1); return g; })()]);
+        const hm = new THREE.InstancedMesh(unit, dark, hvac.length);
+        hvac.forEach((u, i) => { tmpV.set(u.x, u.y, u.z); ts.set(u.w, u.h, u.d); cm.compose(tmpV, tq.identity(), ts); hm.setMatrixAt(i, cm); });
+        hm.castShadow = true; hm.computeBoundingSphere(); scene.add(hm);
+      }
+      if (piers.length) {
+        const pm = new THREE.InstancedMesh(box(1, 1, 1, 0.5), dm, piers.length);
+        piers.forEach((u, i) => { tmpV.set(u.x, 0.3, u.z); ts.set(1.1, u.h, 1.1); cm.compose(tmpV, tq.identity(), ts); pm.setMatrixAt(i, cm); cc.set(u.c).multiplyScalar(0.7); pm.setColorAt(i, cc); });
+        pm.castShadow = true; pm.receiveShadow = true; pm.instanceColor.needsUpdate = true; pm.computeBoundingSphere(); scene.add(pm);
+      }
+    }
+
     // antenna beacons (blink)
     if (beacons.length) {
       const bm = new THREE.MeshBasicMaterial({ color: new THREE.Color(6, 0.2, 0.1) });
@@ -602,21 +699,60 @@ export class World {
         }
       }
     }
-    const { g, head } = this.lampGeometry(8, 2.2);
-    const poleMat = new THREE.MeshStandardMaterial({ color: 0x2a2d30, metalness: 0.7, roughness: 0.5 });
+    // scanned lamp post (Poly Haven street_lamp_01), arm points toward the road; glowing head kept as a separate emissive mesh
+    const lampP = ENV.lamp;
     const headMat = new THREE.MeshStandardMaterial({ color: 0x111111, emissive: new THREE.Color(1, 0.78, 0.5), emissiveIntensity: 5 });
-    const poles = new THREE.InstancedMesh(g, poleMat, lampList.length), heads = new THREE.InstancedMesh(head, headMat, lampList.length);
+    const lampH = lampP.size.y;
+    const headGeo = new THREE.BoxGeometry(0.5, 0.12, 1.1); headGeo.translate(0, lampH - 0.3, 1.9); // glowing luminaire out over the road
+    const armGeo = new THREE.BoxGeometry(0.12, 0.12, 2.2); armGeo.translate(0, lampH - 0.15, 1.1);
+    const lampIms = lampP.parts.map((part) => new THREE.InstancedMesh(part.geo, part.mat, lampList.length));
+    const heads = new THREE.InstancedMesh(headGeo, headMat, lampList.length);
     const q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), one = new THREE.Vector3(1, 1, 1);
     const pools = [];
     lampList.forEach((l, i) => {
       q.setFromAxisAngle(up, l.ang);
       m4.compose(new THREE.Vector3(l.x, 0.3, l.z), q, one);
-      poles.setMatrixAt(i, m4); heads.setMatrixAt(i, m4);
+      for (const im of lampIms) im.setMatrixAt(i, m4);
+      heads.setMatrixAt(i, m4);
       pools.push({ x: l.x + Math.sin(l.ang) * 2.5, z: l.z + Math.cos(l.ang) * 2.5, y: 0.08, s: 10 });
     });
-    poles.castShadow = true;
-    scene.add(poles, heads);
+    for (const im of lampIms) { im.castShadow = true; im.receiveShadow = true; im.computeBoundingSphere(); scene.add(im); }
+    const arms = new THREE.InstancedMesh(armGeo, new THREE.MeshStandardMaterial({ color: 0x2a2d30, metalness: 0.7, roughness: 0.5 }), lampList.length);
+    lampList.forEach((l, i) => { q.setFromAxisAngle(up, l.ang); m4.compose(new THREE.Vector3(l.x, 0.3, l.z), q, one); arms.setMatrixAt(i, m4); });
+    arms.castShadow = true; scene.add(arms);
+    scene.add(heads);
     this.addLightPools(pools);
+
+    // sidewalk props (decimated Poly Haven scans): bins at every block corner, short concrete barrier runs along busy block edges
+    {
+      const binList = [], barList = [];
+      const inset = W + 1.6;
+      for (const x of lines) for (const z of lines) for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+        const px = x + sx * inset, pz = z + sz * inset;
+        if (Math.abs(px) > H - 2 || Math.abs(pz) > H - 2) continue;
+        binList.push({ x: px, z: pz, ang: rnd() * 6.28 });
+      }
+      for (const c of lines) for (let t = -H + 30; t <= H - 30; t += S) {
+        if (rnd() < 0.55) continue;
+        const off = (rnd() < 0.5 ? -1 : 1) * (W + 1.0);
+        if (Math.abs(c + off) > H - 2) continue;
+        for (let k = 0; k < 3; k++) {
+          const along = t + (k - 1) * 1.5;
+          if (rnd() < 0.5) barList.push({ x: along, z: c + off, ang: Math.PI / 2 }); else barList.push({ x: c + off, z: along, ang: 0 });
+        }
+      }
+      const put = (list, prop, solid) => {
+        const q2 = new THREE.Quaternion(), up2 = new THREE.Vector3(0, 1, 0), one2 = new THREE.Vector3(1, 1, 1), m2 = new THREE.Matrix4();
+        for (const part of prop.parts) {
+          const im = new THREE.InstancedMesh(part.geo, part.mat, list.length);
+          list.forEach((l, i) => { q2.setFromAxisAngle(up2, l.ang); m2.compose(new THREE.Vector3(l.x, 0.3, l.z), q2, one2); im.setMatrixAt(i, m2); });
+          im.castShadow = true; im.receiveShadow = true; im.computeBoundingSphere(); scene.add(im);
+        }
+        if (solid) for (const l of list) solid(l);
+      };
+      put(binList, ENV.bin, (l) => this.statics.addCircle(l.x, l.z, 0.55, 'post'));
+      put(barList, ENV.barrier, (l) => { const hx = Math.abs(Math.cos(l.ang)) * 0.4, hz = Math.abs(Math.sin(l.ang)) * 0.4; this.statics.addCircle(l.x, l.z, 0.6, 'post'); });
+    }
 
     this.cityTrees = treeSpots;
   }
@@ -646,14 +782,14 @@ export class World {
         float bu = dot(vBW.xz, tg);
         float bv = vBW.y;
         float glassy = step(0.75, vSeed.y);
-        float cw = mix(3.0, 4.4, fract(vSeed.y * 7.0));
-        vec2 cell = vec2(bu / cw, bv / 3.6);
+        float cw = mix(1.5, 2.0, fract(vSeed.y * 7.0));
+        vec2 cell = vec2(bu / cw, bv / 3.1);
         vec2 fw = fract(cell); vec2 wid = floor(cell);
-        float mx = mix(0.17, 0.04, glassy), my = mix(0.24, 0.06, glassy);
+        float mx = mix(0.22, 0.07, glassy), my = mix(0.26, 0.08, glassy);
         float win = step(mx, fw.x) * step(fw.x, 1.0 - mx) * step(my, fw.y) * step(fw.y, 1.0 - my * 0.6) * step(4.6, bv) * isWall;
         float bRnd = bhash(wid + vSeed.x * 91.7);
         float bLit = step(0.66 - glassy * 0.12, bRnd) * win * step(vSeed.y, 0.99);
-        vec3 glassCol = mix(vec3(0.03, 0.045, 0.07), vec3(0.05, 0.09, 0.12), glassy);
+        vec3 glassCol = mix(vec3(0.025, 0.035, 0.055), vec3(0.045, 0.075, 0.1), glassy) * (0.8 + 0.4 * bhash(wid + 7.7));
         diffuseColor.rgb = mix(diffuseColor.rgb, glassCol, win);
         diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.4 + 0.05, 1.0 - isWall);
         float bShop = isWall * step(bv, 4.1) * step(0.9, bv) * step(vSeed.y, 0.99);
@@ -663,7 +799,7 @@ export class World {
         roughnessFactor = mix(roughnessFactor, 0.16, max(bWin, bShop));`)
         .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         vec3 warm = mix(vec3(1.0, 0.7, 0.4), vec3(0.7, 0.85, 1.0), step(0.86, bRnd));
-        totalEmissiveRadiance += warm * bLit * (0.5 + bRnd * 1.5);
+        totalEmissiveRadiance += warm * bLit * (0.02 + bRnd * 0.1);
         vec3 shopCol = mix(vec3(1.0, 0.55, 0.25), vec3(0.35, 0.75, 1.0), fract(vSeed.x * 13.0));
         totalEmissiveRadiance += shopCol * bShop * 1.4 * step(0.25, fract(bu * 0.07 + vSeed.x));`);
     };
@@ -710,41 +846,68 @@ export class World {
         for (const im of ims) { im.castShadow = cast; im.receiveShadow = true; im.computeBoundingSphere(); this.scene.add(im); }
       }
     };
-    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x4a3526, roughness: 1 });
-    // pines
-    const pineTrunk = new THREE.CylinderGeometry(0.25, 0.4, 4, 5); pineTrunk.translate(0, 2, 0);
-    const c1 = new THREE.ConeGeometry(3.2, 7, 7); c1.translate(0, 6.5, 0);
-    const c2 = new THREE.ConeGeometry(2.5, 6, 7); c2.translate(0, 9.5, 0);
-    const c3 = new THREE.ConeGeometry(1.6, 4.5, 6); c3.translate(0, 12.5, 0);
-    const pineTop = mergeGeometries([c1, c2, c3]);
-    const pineMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95, flatShading: true });
-    for (const t of pines) {
-      t.rot = rnd() * 6.28; t.sy = t.s * (0.9 + rnd() * 0.4);
-      t.col = new THREE.Color().setHSL(0.3 + rnd() * 0.06, 0.35 + rnd() * 0.2, 0.18 + rnd() * 0.08);
-      this.statics.addCircle(t.x, t.z, 0.45 * t.s, 'tree');
-    }
-    chunked(pines, [pineTrunk, pineTop], [trunkMat, pineMat], (t, m) => { q.setFromAxisAngle(up, t.rot); sc.set(t.s, t.sy, t.s); p.set(t.x, t.h - 0.3, t.z); m.compose(p, q, sc); }, true);
-    // broadleaf
-    const bTrunk = new THREE.CylinderGeometry(0.22, 0.35, 3.5, 5); bTrunk.translate(0, 1.75, 0);
-    const b1 = new THREE.IcosahedronGeometry(2.8, 0); b1.translate(0, 5, 0);
-    const b2 = new THREE.IcosahedronGeometry(2.1, 0); b2.translate(1.3, 6.2, 0.6);
-    const b3 = new THREE.IcosahedronGeometry(2.0, 0); b3.translate(-1.1, 5.8, -0.8);
-    const bTop = mergeGeometries([b1, b2, b3]);
-    const bMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, flatShading: true });
-    for (const t of broads) {
-      t.rot = rnd() * 6.28;
-      t.col = new THREE.Color().setHSL(0.18 + rnd() * 0.12, 0.45 + rnd() * 0.2, 0.2 + rnd() * 0.12);
-      if (!t.city) this.statics.addCircle(t.x, t.z, 0.4 * t.s, 'tree');
-    }
-    chunked(broads, [bTrunk, bTop], [trunkMat, bMat], (t, m) => { q.setFromAxisAngle(up, t.rot); sc.setScalar(t.s); p.set(t.x, t.h - 0.2, t.z); m.compose(p, q, sc); }, true);
-    // rocks
-    const rg = new THREE.DodecahedronGeometry(1, 0);
-    const rm = new THREE.MeshStandardMaterial({ color: 0x77706a, roughness: 0.95, flatShading: true });
+    // High-detail trees: 3 hand-grown variants per species (bark-textured trunks + alpha-cut needle / leaf cards), instanced per spatial chunk.
+    for (const t of pines) { t.rot = rnd() * 6.28; t.v = Math.floor(rnd() * 3); t.sy = t.s * (0.9 + rnd() * 0.4); t.tint = new THREE.Color().setHSL(0.26 + rnd() * 0.07, 0.35 + rnd() * 0.2, 0.78 + rnd() * 0.18); this.statics.addCircle(t.x, t.z, 0.5 * t.s, 'tree'); }
+    for (const t of broads) { t.rot = rnd() * 6.28; t.v = Math.floor(rnd() * 3); t.tint = new THREE.Color().setHSL(0.2 + rnd() * 0.1, 0.45 + rnd() * 0.25, 0.62 + rnd() * 0.2); if (!t.city) this.statics.addCircle(t.x, t.z, 0.45 * t.s, 'tree'); }
+    const CH = 350;
+    this.treeChunks = [];
+    const plant = (list, variants, barkMat, leafMat, yScale, lodGeo) => {
+      const buckets = new Map();
+      for (const t of list) { const k = Math.floor(t.x / CH) * 1000 + Math.floor(t.z / CH); let bk = buckets.get(k); if (!bk) buckets.set(k, (bk = { items: [], cx: (Math.floor(t.x / CH) + 0.5) * CH, cz: (Math.floor(t.z / CH) + 0.5) * CH })); bk.items.push(t); }
+      for (const bk of buckets.values()) {
+        const hi = [], lo = [];
+        // one trunk+foliage instanced pair per variant (hi) and a single cheap mesh (lo) per chunk
+        for (let v = 0; v < variants.length; v++) {
+          const items = bk.items.filter((t) => t.v === v); if (!items.length) continue;
+          const tr = new THREE.InstancedMesh(variants[v].trunk, barkMat, items.length), fo = new THREE.InstancedMesh(variants[v].foliage, leafMat, items.length);
+          items.forEach((t, i) => { q.setFromAxisAngle(up, t.rot); sc.set(t.s, yScale(t), t.s); p.set(t.x, t.h - 0.25, t.z); m4.compose(p, q, sc); tr.setMatrixAt(i, m4); fo.setMatrixAt(i, m4); fo.setColorAt(i, t.tint); });
+          tr.castShadow = true; tr.receiveShadow = true; fo.castShadow = true; fo.receiveShadow = false;
+          for (const im of [tr, fo]) { im.computeBoundingSphere(); im.visible = false; this.scene.add(im); hi.push(im); }
+          fo.instanceColor.needsUpdate = true;
+        }
+        const lm = new THREE.InstancedMesh(lodGeo, ENV.lodMat, bk.items.length);
+        bk.items.forEach((t, i) => { q.setFromAxisAngle(up, t.rot); sc.set(t.s, yScale(t), t.s); p.set(t.x, t.h - 0.25, t.z); m4.compose(p, q, sc); lm.setMatrixAt(i, m4); lm.setColorAt(i, t.tint.clone().multiplyScalar(1.5)); });
+        lm.castShadow = false; lm.receiveShadow = true; lm.computeBoundingSphere(); this.scene.add(lm); lo.push(lm);
+        this.treeChunks.push({ cx: bk.cx, cz: bk.cz, hi, lo, state: -1 });
+      }
+    };
+    plant(pines, ENV.pines, ENV.pineBark, ENV.pineMat, (t) => t.sy, ENV.lodPine);
+    plant(broads, ENV.broads, ENV.broadBark, ENV.broadMat, (t) => t.s, ENV.lodBroad);
+    // rocks + boulders: decimated Poly Haven scans (two sources, random rotation / squash)
     for (const r of rocks) {
-      r.e = new THREE.Euler(rnd() * 3, rnd() * 3, rnd() * 3); r.sc = new THREE.Vector3(r.s * (0.8 + rnd() * 0.6), r.s * (0.5 + rnd() * 0.4), r.s * (0.8 + rnd() * 0.6));
-      if (r.s > 1.2) this.statics.addCircle(r.x, r.z, r.s * 0.8, 'rock');
+      r.e = new THREE.Euler((rnd() - 0.5) * 0.5, rnd() * 6.28, (rnd() - 0.5) * 0.5); r.big = r.s > 1.7; const k = r.s * (r.big ? 1.1 : 0.9);
+      r.sc = new THREE.Vector3(k * (0.85 + rnd() * 0.4), k * (0.6 + rnd() * 0.5), k * (0.85 + rnd() * 0.4));
+      if (r.s > 1.2) this.statics.addCircle(r.x, r.z, r.s * 0.7, 'rock');
     }
-    chunked(rocks, [rg], [rm], (r, m) => { q.setFromEuler(r.e); p.set(r.x, r.h, r.z); m.compose(p, q, r.sc); }, true);
+    this.propChunks = [];
+    const scatter = (list, prop, cullDist = 0) => {
+      const C = cullDist ? 300 : CH, buckets = new Map();
+      for (const r of list) { const k = Math.floor(r.x / C) * 1000 + Math.floor(r.z / C); let bk = buckets.get(k); if (!bk) buckets.set(k, (bk = { items: [], cx: (Math.floor(r.x / C) + 0.5) * C, cz: (Math.floor(r.z / C) + 0.5) * C })); bk.items.push(r); }
+      for (const bk of buckets.values()) {
+        const ims = prop.parts.map((part) => new THREE.InstancedMesh(part.geo, part.mat, bk.items.length));
+        bk.items.forEach((r, i) => { q.setFromEuler(r.e); p.set(r.x, r.h - 0.1 * r.sc.y, r.z); m4.compose(p, q, r.sc); for (const im of ims) im.setMatrixAt(i, m4); });
+        for (const im of ims) { im.castShadow = !cullDist; im.receiveShadow = true; im.computeBoundingSphere(); this.scene.add(im); }
+        if (cullDist) this.propChunks.push({ cx: bk.cx, cz: bk.cz, ims, d: cullDist, on: true });
+      }
+    };
+    scatter(rocks.filter((r) => !r.big), ENV.rock); scatter(rocks.filter((r) => r.big), ENV.boulder);
+    // undergrowth: shrubs + ferns near trees (denser under broadleaf / lowland), instanced per chunk, no collision
+    {
+      const under = [], ferns = [];
+      const near = [...pines, ...broads].filter((t) => !t.city);
+      for (let i = 0; i < near.length; i += 5) {
+        const t = near[i], n = 1 + Math.floor(rnd() * 2);
+        for (let k = 0; k < n; k++) {
+          const a = rnd() * 6.28, d = 2.5 + rnd() * 7, x = t.x + Math.cos(a) * d, z = t.z + Math.sin(a) * d;
+          if (this.hf.roadDist(x, z) < 6) continue; const h = this.hf.get(x, z); if (h < WATER_LEVEL + 1.5) continue;
+          const o = { x, z, h, e: new THREE.Euler(0, rnd() * 6.28, 0), sc: new THREE.Vector3(0, 0, 0) }; // (o used below)
+          const sz = 0.7 + rnd() * 1.1; o.sc.set(sz, sz * (0.8 + rnd() * 0.5), sz);
+          (rnd() < 0.55 ? ferns : under).push(o);
+        }
+      }
+      scatter(under, ENV.shrub, 280); scatter(ferns, ENV.fern, 200);
+    }
+
   }
 
   // ---------------- Minimap ----------------
@@ -787,5 +950,12 @@ export class World {
   update(dt, t) {
     globalUniforms.time.value = t;
     for (const u of this.updaters) u(dt, t);
+    const f = this.focus;
+    if (f && this.propChunks) for (const c of this.propChunks) { const on = Math.hypot(c.cx - f.x, c.cz - f.z) < c.d + 150; if (on !== c.on) { c.on = on; for (const m of c.ims) m.visible = on; } }
+    // tree LOD: full-detail trees only near the camera; far chunks use cheap vertex-coloured trees
+    if (f && this.treeChunks) for (const c of this.treeChunks) {
+      const d = Math.hypot(c.cx - f.x, c.cz - f.z), want = d < 330 ? 1 : 0;
+      if (want !== c.state) { c.state = want; for (const m of c.hi) m.visible = !!want; for (const m of c.lo) m.visible = !want; }
+    }
   }
 }

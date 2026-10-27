@@ -4,6 +4,7 @@ import { World } from './world.js';
 import { Post } from './post.js';
 import { CameraRig, CAM_MODES } from './camera.js';
 import { Input } from './input.js';
+import { TouchControls } from './touch.js';
 import { AudioSys } from './audio.js';
 import { VFX } from './vfx.js';
 import { HUD } from './hud.js';
@@ -11,6 +12,8 @@ import { Game, fmtTime } from './game.js';
 import { PLAYER_CARS } from './car.js';
 import { clamp, lerp } from './util.js';
 import { loadCarAssets } from './carAssets.js';
+import { Net } from './net.js';
+import { loadEnvAssets } from './envAssets.js';
 
 const $ = (id) => document.getElementById(id);
 const DEFAULTS = { camMode: 0, fov: 65, shake: 0, speedFx: true, centerDot: false, mouseLook: 1, mouseSens: 1, mouseInvY: false, mouseReturn: true, cinematic: true, voice: true, quality: 1, master: 0.8, music: 0.6, sfx: 0.9 };
@@ -33,6 +36,7 @@ camera.position.set(0, 80, 300);
 
 const world = new World(renderer, scene);
 const input = new Input();
+const touch = new TouchControls(input);
 const audio = new AudioSys();
 audio.settings = settings;
 const vfx = new VFX(scene);
@@ -70,6 +74,7 @@ window.addEventListener('resize', onResize);
 // ---------- boot ----------
 async function boot() {
   const bar = $('load-bar'), txt = $('load-text');
+  txt.textContent = 'Loading environment assets…'; await loadEnvAssets();
   await world.build((p, t) => { bar.style.width = `${Math.round(p * 100)}%`; txt.textContent = t; });
   txt.textContent = 'LOADING CAR MODELS'; await loadCarAssets();
   post = new Post(renderer, scene, camera);
@@ -130,8 +135,11 @@ function loop(now) {
   input.pollPad();
   if (document.pointerLockElement === canvas && !(lookAllowed() && settings.mouseLook === 2)) document.exitPointerLock();
   handleGlobalKeys();
+  touch.update(app === 'game' && game.state !== 'ending' && game.state !== 'result', !$('abilities').classList.contains('hidden'));
   const sh = $('sound-hint'); const needHint = audio.ready && audio.ctx.state === 'suspended'; if (sh.classList.contains('hidden') === needHint) sh.classList.toggle('hidden', !needHint);
-  if (app === 'game' || app === 'result' || app === 'title' || app === 'menu') {
+  const mpLive = game.multi && (app === 'paused' || app === 'settings');
+  game.inputLocked = mpLive;
+  if (app === 'game' || app === 'result' || app === 'title' || app === 'menu' || mpLive) {
     game.update(dt);
   }
   if (app === 'game' && game.state !== 'ending' && game.state !== 'result') {
@@ -197,7 +205,7 @@ let navMode = false;
 function setNavMode() { if (!navMode) { navMode = true; document.body.classList.add('nav-mode'); } }
 window.addEventListener('mousemove', (e) => { if (navMode && (Math.abs(e.movementX) + Math.abs(e.movementY) > 2)) { navMode = false; document.body.classList.remove('nav-mode'); } });
 function visibleScreen() {
-  for (const id of ['settings', 'controls', 'pause', 'result', 'garage', 'menu', 'title']) if (!$(id).classList.contains('hidden')) return id;
+  for (const id of ['settings', 'controls', 'pause', 'result', 'lobby', 'garage', 'menu', 'title']) if (!$(id).classList.contains('hidden')) return id;
   return null;
 }
 function focusables(scr) {
@@ -212,7 +220,8 @@ const BACK = {
   controls: () => { show('menu'); audio.click(); },
   // the Escape that released pointer lock must not immediately resume
   pause: () => { if (performance.now() - lockPauseAt > 500) pause(false); },
-  result: () => backToMenu(),
+  result: () => (game.multi ? backToLobby() : backToMenu()),
+  lobby: () => mpBack(),
   garage: () => backToMenu(),
 };
 function menuNav(scr) {
@@ -289,7 +298,7 @@ window.addEventListener('keydown', unlockAudio);
 window.addEventListener('gamepadconnected', (e) => { const g = $('pad-badge'); g.textContent = '🎮 Gamepad connected: D-pad/stick to select, A to confirm, B to go back'; g.classList.remove('hidden'); g.classList.remove('rfade'); void g.offsetWidth; g.classList.add('rfade'); });
 
 // ---------- UI flow ----------
-function show(id) { for (const p of ['title', 'menu', 'garage', 'pause', 'result', 'settings', 'controls']) $(p).classList.toggle('hidden', p !== id); if (id) delete navIdx[id]; document.querySelectorAll('.pad-focus').forEach((e) => e.classList.remove('pad-focus')); }
+function show(id) { for (const p of ['title', 'menu', 'garage', 'pause', 'result', 'settings', 'controls', 'lobby']) $(p).classList.toggle('hidden', p !== id); if (id) delete navIdx[id]; document.querySelectorAll('.pad-focus').forEach((e) => e.classList.remove('pad-focus')); }
 function enterMenu() {
   audio.init();
   audio.settings = settings; audio.applyVolumes();
@@ -297,9 +306,11 @@ function enterMenu() {
   audio.click();
   app = 'menu'; show('menu');
   if (!game.demo) { game.start('demo'); demoShotT = 0; }
+  if (roomParam && !net.lobby && !enterMenu.used) { enterMenu.used = true; enterLobby(); $('mp-code').value = roomParam.toUpperCase().slice(0, 4); mpErr('Invite: press JOIN to enter room ' + roomParam.toUpperCase()); }
 }
 function backToMenu() {
   audio.click();
+  if (game.multi) { net.leave(); game.multi = null; }
   hud.show(false);
   app = 'menu'; show('menu');
   game.start('demo'); demoShotT = 0;
@@ -357,12 +368,13 @@ function startGame() {
   show(null);
   hud.show(true);
   app = 'game';
+  touch.fullscreen();
   game.start(selMode, selCar);
   rig.setMode(settings.camMode || 0);
   hud.camLabel(CAM_MODES[rig.modeIndex].label);
 }
 function pause(p) {
-  if (p) { app = 'paused'; show('pause'); audio.silence(); audio.click(); }
+  if (p) { app = 'paused'; show('pause'); $('btn-restart').style.display = game.multi ? 'none' : ''; if (!game.multi) audio.silence(); audio.click(); }
   else { app = 'game'; show(null); audio.click(); if (settings.mouseLook === 2) lockPointer(); }
 }
 
@@ -380,6 +392,15 @@ window.addEventListener('pointerdown', (e) => {
   if (settings.mouseLook === 2) { lockPointer(); return; }
   if (e.button === 0 || e.button === 2) { mouseDrag = true; document.body.classList.add('mouse-drag'); }
 });
+// touch: drag anywhere on the free screen area to look around (buttons stop propagation, so they never reach here)
+let lookPtr = null, lookX = 0, lookY = 0;
+window.addEventListener('pointerdown', (e) => { if (e.pointerType === 'touch' && lookAllowed() && settings.mouseLook && lookPtr === null) { lookPtr = e.pointerId; lookX = e.clientX; lookY = e.clientY; } });
+window.addEventListener('pointermove', (e) => {
+  if (e.pointerId !== lookPtr || !lookAllowed()) return;
+  rig.addLook((e.clientX - lookX) * 1.3, (e.clientY - lookY) * 1.3); lookX = e.clientX; lookY = e.clientY;
+});
+const endLook = (e) => { if (e.pointerId === lookPtr) lookPtr = null; };
+window.addEventListener('pointerup', endLook); window.addEventListener('pointercancel', endLook);
 window.addEventListener('pointerup', endDrag);
 window.addEventListener('blur', endDrag);
 window.addEventListener('mousemove', (e) => {
@@ -398,7 +419,8 @@ function showResult(r) {
   $('res-title').textContent = title;
   $('res-title').className = good ? 'good' : 'bad';
   const rows = [];
-  if (selMode === 'race') { rows.push(['Position', r.reason === 'finish' ? `${r.place} / 4` : 'DNF'], ['Time', fmtTime(r.time)]); }
+  if (r.multi) { $('btn-retry').textContent = 'LOBBY'; } else $('btn-retry').textContent = 'RETRY';
+  if (selMode === 'race') { rows.push(['Position', r.reason === 'finish' ? `${r.place} / ${r.total || 4}` : 'DNF'], ['Time', fmtTime(r.time)]); }
   if (selMode === 'cop') { rows.push(['Busted', `${r.busted} / 4`], ['Racers escaped', r.escaped], ['Time', fmtTime(r.time)]); const medal = r.busted >= 4 ? 'GOLD' : r.busted >= 3 ? 'SILVER' : r.busted >= 2 ? 'BRONZE' : '-'; rows.push(['Rating', medal]); }
   if (selMode === 'free') { rows.push(['Bounty', r.bounty.toLocaleString()], ['Escapes', r.escapes], ['Drive time', fmtTime(r.time)], ['Max heat', r.heat]); }
   rows.push(['Takedowns', r.takedowns], ['Top speed', `${Math.round(r.maxSpeed)} km/h`]);
@@ -477,10 +499,88 @@ $('car-next').onclick = () => selectCar(selCar + 1);
 $('btn-start').onclick = () => startGame();
 $('btn-garage-back').onclick = () => backToMenu();
 $('btn-resume').onclick = () => pause(false);
-$('btn-restart').onclick = () => startGame();
+$('btn-restart').onclick = () => { if (!game.multi) startGame(); };
 $('btn-pause-settings').onclick = () => openSettings('pause');
-$('btn-quit').onclick = () => backToMenu();
-$('btn-retry').onclick = () => startGame();
+$('btn-quit').onclick = () => (game.multi ? backToLobby() : backToMenu());
+$('btn-retry').onclick = () => (game.multi ? backToLobby() : startGame());
 $('btn-res-menu').onclick = () => backToMenu();
+
+// ---------- multiplayer lobby ----------
+const net = new Net();
+let mpName = localStorage.getItem('redline-name') || 'RACER' + Math.floor(Math.random() * 900 + 100);
+let mpCar = +(localStorage.getItem('redline-car') || 0) % PLAYER_CARS.length;
+const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+function mpErr(t) { $('mp-err').textContent = t || ''; }
+function enterLobby() {
+  audio.click();
+  app = 'lobby'; show('lobby');
+  $('mp-name').value = mpName;
+  mpErr('');
+  renderLobby();
+}
+function mpBack() { if (net.lobby) { net.leave(); renderLobby(); } else backToMenu(); }
+function backToLobby() {
+  audio.click(); hud.show(false);
+  game.multi = null;
+  if (net.isHost) net.send({ t: 'end' });
+  app = 'lobby'; show('lobby');
+  game.start('demo'); demoShotT = 0;
+  if (audio.music) audio.music.setLevel(0);
+  audio.silence();
+  renderLobby();
+}
+function renderLobby() {
+  const L = net.lobby, inRoom = !!L;
+  $('mp-connect').classList.toggle('hidden', inRoom);
+  $('mp-room').classList.toggle('hidden', !inRoom);
+  $('mp-car').innerHTML = PLAYER_CARS.map((c, i) => `<button data-i="${i}" class="${i === mpCar ? 'on' : ''}">${esc(c.name)}</button>`).join('');
+  $('mp-car').querySelectorAll('button').forEach((b) => (b.onclick = () => { mpCar = +b.dataset.i; localStorage.setItem('redline-car', mpCar); if (net.lobby) net.send({ t: 'setcar', car: mpCar, name: mpName }); renderLobby(); audio.click(); }));
+  if (!inRoom) return;
+  const host = net.isHost;
+  $('mp-room-code').textContent = L.code;
+  const rows = L.players.map((p) => `<div class="mp-p ${p.id === net.id ? 'me' : ''}"><b>${esc(p.name)}${p.id === L.host ? ' ★' : ''}</b><span>${esc(PLAYER_CARS[p.car % PLAYER_CARS.length].name)}</span></div>`);
+  const bots = Math.min(L.cfg.bots, 8 - L.players.length);
+  for (let i = 0; i < bots; i++) rows.push(`<div class="mp-p bot"><b>BOT</b><span>AI racer</span></div>`);
+  $('mp-players').innerHTML = rows.join('');
+  $('mp-mode').querySelectorAll('button').forEach((b) => { b.classList.toggle('on', b.dataset.v === L.cfg.mode); b.disabled = !host; b.onclick = () => { net.send({ t: 'cfg', mode: b.dataset.v, bots: L.cfg.bots }); audio.click(); }; });
+  $('mp-bots').innerHTML = [0, 1, 2, 3, 4, 5, 6].map((n) => `<button data-n="${n}" class="${n === L.cfg.bots ? 'on' : ''}" ${host ? '' : 'disabled'}>${n}</button>`).join('');
+  $('mp-bots').querySelectorAll('button').forEach((b) => (b.onclick = () => { net.send({ t: 'cfg', mode: L.cfg.mode, bots: +b.dataset.n }); audio.click(); }));
+  $('btn-mp-start').style.display = host ? '' : 'none';
+  $('mp-wait').textContent = host ? (L.inGame ? 'A session is still running — START launches a new one for everyone.' : 'Share the code. Bots fill empty grid slots; set 0 for humans only.') : (L.inGame ? 'Session in progress — wait for the host to start the next one.' : 'Waiting for the host to start…');
+}
+async function mpConnect() {
+  mpName = ($('mp-name').value || '').trim().slice(0, 14) || mpName;
+  localStorage.setItem('redline-name', mpName);
+  mpErr('Connecting…');
+  try { await net.connect(); mpErr(''); return true; } catch (e) { mpErr(e.message); return false; }
+}
+net.on((m) => {
+  if (m.t === 'lobby' && app === 'lobby') renderLobby();
+  else if (m.t === 'err') mpErr(m.msg);
+  else if (m.t === 'closed') { mpErr('Disconnected from server'); if (game.multi && app !== 'lobby') game.notify('DISCONNECTED', 'Connection to the room was lost', '#ff3050', true); if (app === 'lobby') renderLobby(); }
+  else if (m.t === 'hostgone') { if (game.multi) game.notify('HOST LEFT', 'Bots stopped — you are now host for the next session', '#aaaaaa'); }
+  else if (m.t === 'start') {
+    if (!['lobby', 'result', 'game', 'paused'].includes(app)) return;
+    audio.init(); audio.settings = settings; audio.applyVolumes();
+    if (audio.music && !audio.music.started) { try { audio.music.start(); } catch (e) { /* */ } }
+    selMode = m.mode; selCar = mpCar;
+    show(null); hud.show(true); app = 'game';
+    const me = m.players.find((p) => p.id === net.id);
+    game.start(m.mode, me ? me.car : mpCar, { myId: net.id, host: m.host, players: m.players, bots: m.bots, net });
+    rig.setMode(settings.camMode || 0);
+    hud.camLabel(CAM_MODES[rig.modeIndex].label);
+    game.notify('MULTIPLAYER', `${m.players.length} player${m.players.length > 1 ? 's' : ''}${m.bots ? ` + ${m.bots} bot${m.bots > 1 ? 's' : ''}` : ''}`, '#ff3aa0', true);
+  } else if (game && game.multi) game.onNet(m);
+});
+$('btn-mp').onclick = () => enterLobby();
+$('btn-mp-back').onclick = () => backToMenu();
+$('btn-mp-create').onclick = async () => { if (await mpConnect()) net.send({ t: 'create', name: mpName, car: mpCar }); audio.click(); };
+$('btn-mp-join').onclick = async () => { const c = $('mp-code').value.trim().toUpperCase(); if (c.length !== 4) return mpErr('Enter the 4-letter room code'); if (await mpConnect()) net.send({ t: 'join', code: c, name: mpName, car: mpCar }); audio.click(); };
+$('btn-mp-leave').onclick = () => { net.leave(); renderLobby(); audio.click(); };
+$('btn-mp-start').onclick = () => { net.send({ t: 'start' }); audio.click(); };
+$('btn-mp-copy').onclick = () => { const u = `${location.origin}${location.pathname}?room=${net.lobby?.code}`; navigator.clipboard?.writeText(u).then(() => mpErr('Invite link copied'), () => mpErr(u)); };
+$('mp-name').addEventListener('change', () => { mpName = $('mp-name').value.trim().slice(0, 14) || mpName; localStorage.setItem('redline-name', mpName); if (net.lobby) net.send({ t: 'setcar', car: mpCar, name: mpName }); });
+for (const id of ['mp-name', 'mp-code']) $(id).addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter' && id === 'mp-code') $('btn-mp-join').click(); });
+const roomParam = new URLSearchParams(location.search).get('room');
 
 boot().catch((e) => { console.error(e); $('load-text').textContent = 'Error: ' + e.message; });

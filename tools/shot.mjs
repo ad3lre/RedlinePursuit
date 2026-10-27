@@ -10,12 +10,13 @@ await pg.evaluateOnNewDocument(() => localStorage.setItem('redline-settings', JS
 await pg.goto('http://localhost:8766/?noperf');
 await pg.waitForFunction('window.__rp', { timeout: 120000 });
 await new Promise((r) => setTimeout(r, 1500));
-await pg.screenshot({ path: pre + '_0title.png' });
+if (!process.argv.includes('--quick')) await pg.screenshot({ path: pre + '_0title.png' });
 await pg.click('#title'); await new Promise((r) => setTimeout(r, 1500));
 await pg.click('[data-mode="race"]'); await new Promise((r) => setTimeout(r, 4000));
-await pg.screenshot({ path: pre + '_1garage.png' });
+if (!process.argv.includes('--quick')) await pg.screenshot({ path: pre + '_1garage.png' });
 await pg.click('#btn-start'); await new Promise((r) => setTimeout(r, 9000));
 await pg.screenshot({ path: pre + '_2race.png' });
+if (process.argv.includes('--quick')) { await br.close(); srv.close(); process.exit(0); }
 await pg.keyboard.down('KeyW'); await new Promise((r) => setTimeout(r, 4000));
 await pg.screenshot({ path: pre + '_3drive.png' });
 for (let i = 0; i < 2; i++) { await pg.keyboard.press('KeyC'); await new Promise((r) => setTimeout(r, 600)); }

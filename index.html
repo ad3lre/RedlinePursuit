@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <title>REDLINE PURSUIT</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Noto+Sans+JP:wght@400;700;900&display=swap" rel="stylesheet" />
@@ -47,6 +47,17 @@ button { font-family: inherit; cursor: pointer; }
 .mode b { display: block; font-size: 26px; font-style: italic; letter-spacing: 0.05em; }
 .mode span { font-family: 'Noto Sans JP'; font-size: 13px; color: rgba(255,255,255,0.72); }
 .links { margin-top: auto; display: flex; gap: 12px; }
+.mode.mp { border-left-color: #ff3aa0; } .mode.mp:hover { background: linear-gradient(90deg, rgba(255,60,160,0.32), rgba(255,60,160,0.05)); }
+.nav-mode .mode.mp.pad-focus { background: linear-gradient(90deg, rgba(255,60,160,0.42), rgba(255,60,160,0.08)); transform: translateX(8px); }
+#lobby input { background: rgba(255,255,255,0.07); border: 1px solid var(--line); color: #fff; padding: 7px 10px; font: 700 16px Rajdhani, sans-serif; letter-spacing: 0.08em; width: 180px; }
+#lobby .mp-join { display: flex; gap: 8px; } #lobby #mp-code { width: 90px; text-transform: uppercase; text-align: center; }
+.mp-code-row { display: flex; align-items: center; gap: 14px; margin: 14px 0 8px; letter-spacing: 0.2em; font-weight: 700; }
+.mp-code-row b { font-size: 34px; color: var(--acc); letter-spacing: 0.25em; }
+#mp-players { margin: 8px 0 6px; }
+.mp-p { display: flex; justify-content: space-between; padding: 7px 10px; background: rgba(255,255,255,0.04); margin-bottom: 4px; font-family: 'Noto Sans JP'; font-size: 14px; }
+.mp-p b { font-family: Rajdhani, sans-serif; font-size: 18px; } .mp-p.me { border-left: 3px solid var(--acc); } .mp-p.bot { opacity: .55; }
+.mp-note { font-family: 'Noto Sans JP'; font-size: 13px; opacity: .75; margin-top: 10px; min-height: 1em; } .mp-note.err { color: #ff5a6a; opacity: 1; }
+#mp-room.hidden, #mp-connect.hidden { display: none; }
 .btn { background: rgba(255,255,255,0.06); border: 1px solid var(--line); color: #fff; padding: 10px 22px; font-size: 16px; font-weight: 700; letter-spacing: 0.1em; transition: all .15s; clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%); }
 .btn:hover { background: var(--acc); color: #000; }
 .btn.primary { background: linear-gradient(90deg, var(--acc), var(--acc2)); color: #000; font-size: 22px; padding: 14px 44px; }
@@ -239,6 +250,7 @@ button:focus { outline: none; }
       <button class="mode" data-mode="race"><b>HOT PURSUIT RACE</b><span>Race 3 rivals as a street racer. Shake off the police and take 1st place.</span></button>
       <button class="mode cop" data-mode="cop"><b>INTERCEPTOR</b><span>Play as the police. Bust 4 illegal racers with spike strips and EMP.</span></button>
       <button class="mode free" data-mode="free"><b>FREE RUN</b><span>Roam the huge map freely. If a patrol spots you, escape.</span></button>
+      <button class="mode mp" id="btn-mp"><b>MULTIPLAYER</b><span>Race or roam with friends online. Share a room code and fill the grid with optional bots.</span></button>
       <div class="links">
         <button class="btn" id="btn-settings">SETTINGS</button>
         <button class="btn" id="btn-controls">CONTROLS</button>
@@ -281,6 +293,23 @@ button:focus { outline: none; }
     <p class="jp" style="margin-top:16px;font-size:13px;opacity:.75">Rules: during a pursuit, if police surround you and you slow down, the BUSTING meter fills and you get arrested. Ram patrol cars to damage them and score a takedown. As your heat level rises, backup, roadblocks and spike strips appear.</p>
     <div class="btnrow"><button class="btn" id="btn-controls-back">BACK</button></div></div></div>
 
+  <div id="lobby" class="screen hidden"><div class="panel"><h1>MULTIPLAYER</h1>
+    <div class="set-row"><label>Your name</label><input id="mp-name" maxlength="14" spellcheck="false"></div>
+    <div class="set-row"><label>Car</label><div class="segs" id="mp-car"></div></div>
+    <div id="mp-connect">
+      <div class="set-row"><label>Join a room</label><div class="mp-join"><input id="mp-code" maxlength="4" placeholder="CODE" spellcheck="false"><button class="btn" id="btn-mp-join">JOIN</button></div></div>
+      <div class="btnrow"><button class="btn" id="btn-mp-back">BACK</button><button class="btn primary" id="btn-mp-create">CREATE ROOM</button></div>
+    </div>
+    <div id="mp-room" class="hidden">
+      <div class="mp-code-row">ROOM CODE <b id="mp-room-code"></b><button class="btn" id="btn-mp-copy">COPY LINK</button></div>
+      <div id="mp-players"></div>
+      <div class="set-row"><label>Event</label><div class="segs" id="mp-mode"><button data-v="race">RACE</button><button data-v="free">FREE ROAM</button></div></div>
+      <div class="set-row"><label>Bots</label><div class="segs" id="mp-bots"></div></div>
+      <div id="mp-wait" class="mp-note"></div>
+      <div class="btnrow"><button class="btn" id="btn-mp-leave">LEAVE</button><button class="btn primary" id="btn-mp-start">START</button></div>
+    </div>
+    <div id="mp-err" class="mp-note err"></div>
+  </div></div>
   <div id="pause" class="screen hidden"><div class="panel"><h1>PAUSED</h1><div class="menu-list">
     <button class="btn" id="btn-resume">RESUME</button><button class="btn" id="btn-restart">RESTART</button><button class="btn" id="btn-pause-settings">SETTINGS</button><button class="btn" id="btn-quit">MAIN MENU</button></div></div></div>
 

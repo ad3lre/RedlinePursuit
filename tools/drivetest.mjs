@@ -4,11 +4,13 @@ const srv = http.createServer((q, r) => { const p = q.url === '/' ? '/index.html
 const br = await puppeteer.launch({ executablePath: '/usr/bin/google-chrome', headless: 'new', args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
 const pg = await br.newPage(); pg.on('pageerror', (e) => console.log('pageerror', e.message));
 await pg.goto('http://localhost:8767/'); await pg.waitForFunction('window.__rp', { timeout: 150000 });
-const res = await pg.evaluate(async () => {
+const QUICK = !process.argv.includes('--full'); // default: 3 roads (highway + tightest connector + a ramp). --full = all 19, only for the final check
+const res = await pg.evaluate(async (QUICK) => {
   const { game, world } = window.__rp;
   game.start('free', 0); for (let i = 0; i < 5; i++) game.update(1 / 60);
   game.state = 'play'; const pl = game.player; const out = [];
-  const roads = world.net.roads;
+  let roads = world.net.roads;
+  if (QUICK) roads = [roads[0], roads.find((r) => r.name === 'CANYON ROAD' && r.kind === 'conn'), roads.find((r) => r.kind === 'ramp')]; // highway + tightest connector + one ramp
   for (const r of roads) {
     const pts = r.pts; const stats = { name: r.name + ' ' + r.kind, hits: 0, stuck: 0, air: 0, maxGap: 0, steps: 0, maxOff: 0 };
     const a = pts[2], b = pts[3]; pl.place(a.x, a.z, Math.atan2(b.x - a.x, b.z - a.z), 25); pl.health = 1; pl.wrecked = false;
@@ -28,6 +30,6 @@ const res = await pg.evaluate(async () => {
     game.onImpact = prev; stats.hits = impacts; stats.stuck = +(lowSpeed / 120).toFixed(1); stats.reached = idx + '/' + pts.length; stats.timedOut = t >= maxT; stats.maxGap = +stats.maxGap.toFixed(2); stats.maxOff = +stats.maxOff.toFixed(1); stats.air = +(stats.air / 120).toFixed(1); out.push(stats);
   }
   return out;
-});
+}, QUICK);
 for (const s of res) console.log(`${s.name.padEnd(26)} reached ${s.reached.padEnd(7)} impacts=${s.hits} stuck=${s.stuck}s air=${s.air}s maxGroundGap=${s.maxGap} maxOffRoad=${s.maxOff}${s.airAt ? ' airAt=' + s.airAt : ''}${s.timedOut ? ' TIMEOUT' : ''}`);
 await br.close(); srv.close();

@@ -15,6 +15,19 @@ const DIRS = ['north', 'north east', 'east', 'south east', 'south', 'south west'
 
 const tmp = new THREE.Vector3();
 
+// Remote-controlled car (another player, or a bot simulated by the room host). Inputs come from snapshots;
+// local physics dead-reckons between snapshots and netSmooth() pulls the car toward the authoritative pose.
+class RemoteAI {
+  constructor(car) { this.car = car; this.progress = 0; this.finished = false; this.snap = null; this.age = 0; this.remote = true; }
+  update(dt) {
+    this.age += dt;
+    const s = this.snap; if (!s) return;
+    const i = this.car.input;
+    i.steer = s.st; i.throttle = s.th; i.brake = s.br; i.handbrake = s.f & 8 ? 1 : 0; i.nitro = s.f & 16 ? 1 : 0;
+  }
+}
+const BOT_NAMES = RACER_NAMES;
+
 export class Game {
   constructor(ctx) {
     Object.assign(this, ctx); // renderer, scene, camera, world, audio, input, settings, rig, vfx, hud
@@ -95,7 +108,7 @@ export class Game {
   // ---------------- lifecycle ----------------
   clear() {
     for (const c of [...this.cars]) c.dispose();
-    this.cars = []; this.traffic = []; this.cops = []; this.racers = [];
+    this.cars = []; this.traffic = []; this.cops = []; this.racers = []; this.netCars = new Map(); this.respawnT = 0;
     for (const s of this.spikes) this.scene.remove(s.mesh);
     this.spikes = []; this.roadblocks = [];
     this.player = null; this.gates.visible = false;
@@ -116,8 +129,9 @@ export class Game {
     return this._route;
   }
 
-  start(mode, carIdx) {
+  start(mode, carIdx, multi = null) {
     this.clear();
+    this.multi = multi;
     this.mode = mode;
     this.carIdx = carIdx;
     this.time = 0; this.raceTime = 0; this.heat = 0; this.bounty = 0; this.takedowns = 0; this.maxSpeed = 0;
@@ -138,7 +152,8 @@ export class Game {
     this.player = pl;
     pl.nitro = police ? 1 : 0.6;
     const P = {};
-    if (route) {
+    if (multi) this.setupMulti(pl, route);
+    else if (route) {
       // checkpoints
       this.checkpoints = [];
       const N = 9;
@@ -198,6 +213,170 @@ export class Game {
     this.audio.music && this.audio.music.setLevel(1);
     this.hud.setMode(mode, this);
     this.updateGate();
+  }
+
+  // ---------------- multiplayer ----------------
+  // multi = { myId, host, players: [{ id, name, car, slot }], bots, net }
+  setupMulti(pl, route) {
+    const M = this.multi;
+    const me = M.players.find((p) => p.id === M.myId);
+    pl.net = { id: M.myId, owner: M.myId };
+    pl.name = me?.name || 'YOU';
+    this.netSendT = 0;
+    const rr = this.raceRoute();
+    this.botRoute = rr;
+    if (route) {
+      this.checkpoints = [];
+      const N = 9;
+      for (let i = 1; i <= N; i++) this.checkpoints.push((route.length - 60) * (i / N) + 30);
+      this.finishDist = this.checkpoints[N - 1];
+    }
+    const total = M.players.length + M.bots;
+    const rows = Math.ceil(total / 2);
+    const P = {};
+    const lane = (k) => (k % 2 ? 3.5 : -3.5);
+    const placeAt = (car, k) => {
+      const d = (route ? 34 : 220) + (rows - 1) * 12 - Math.floor(k / 2) * 12;
+      const p = pointAtDist(rr, d, P);
+      const lat = lane(k);
+      car.place(p.x + -p.dz * lat, p.z + p.dx * lat, Math.atan2(p.dx, p.dz), 0);
+    };
+    for (const p of M.players) {
+      if (p.id === M.myId) { placeAt(pl, p.slot); continue; }
+      const spec = PLAYER_CARS[p.car % PLAYER_CARS.length];
+      const col = p.car === this.carIdx ? RACER_COLORS[(p.slot + 2) % RACER_COLORS.length] : [spec.color, spec.color2];
+      const c = this.addCar(spec, { role: 'racer', name: p.name, color: col[0], color2: col[1] });
+      c.net = { id: p.id, owner: p.id, human: true };
+      c.ai = new RemoteAI(c);
+      c.nitro = 0.6;
+      placeAt(c, p.slot);
+      this.netCars.set(p.id, c);
+      this.racers.push(c);
+    }
+    for (let i = 0; i < M.bots; i++) {
+      const k = M.players.length + i;
+      const ms = PLAYER_CARS[(i + 1) % PLAYER_CARS.length];
+      const col = RACER_COLORS[i % RACER_COLORS.length];
+      const rm = RIVAL_MODELS[i % RIVAL_MODELS.length];
+      const c = this.addCar({ ...ms, kind: rm.kind || ms.kind, top: ms.top * (0.985 + i * 0.01) }, { role: 'racer', model: rm.model, color: col[0], color2: col[1], livery: 'stripe', name: 'BOT ' + BOT_NAMES[i % BOT_NAMES.length] });
+      const id = 'b' + i;
+      c.net = { id, owner: M.host, bot: true };
+      placeAt(c, k);
+      if (M.host === M.myId) { c.ai = new RacerAI(c, rr, 0.97 + i * 0.015); c.ai.lane = lane(k); }
+      else c.ai = new RemoteAI(c);
+      c.nitro = 0.5;
+      this.netCars.set(id, c);
+      this.racers.push(c);
+    }
+    this.racers.push(pl);
+    if (!route) this.heat = 1;
+  }
+  mine(car) { return !this.multi || !car.net || car.net.owner === this.multi.myId; }
+  ownedNetCars() {
+    const out = [this.player];
+    if (this.multi && this.multi.host === this.multi.myId) for (const c of this.netCars.values()) if (c.net.bot) out.push(c);
+    return out;
+  }
+  netSend(dtReal) {
+    const M = this.multi; if (!M || !M.net) return;
+    this.netSendT -= dtReal;
+    if (this.netSendT > 0) return;
+    this.netSendT = 1 / 15;
+    const r = (v, k = 100) => Math.round(v * k) / k;
+    const cars = this.ownedNetCars().map((c) => {
+      const pl = c === this.player;
+      const prog = pl ? this.playerProgress || 0 : c.ai?.progress || 0;
+      const f = (c.wrecked ? 1 : 0) | (c.nitroActive ? 2 : 0) | ((pl ? this.playerFinished : c.ai?.finished) ? 4 : 0) | (c.input.handbrake ? 8 : 0) | (c.input.nitro ? 16 : 0);
+      return [c.net.id, r(c.pos.x), r(c.pos.y), r(c.pos.z), r(c.yaw, 1000), r(c.vel.x), r(c.vel.y), r(c.angVel, 1000), r(c.health, 1000), f, Math.round(prog), r(c.input.steer), r(c.input.throttle), r(c.input.brake), r(c.nitro)];
+    });
+    M.net.send({ t: 's', cars });
+  }
+  onNet(m) {
+    if (!this.multi) return;
+    if (m.t === 's') {
+      for (const a of m.cars || []) {
+        const c = this.netCars.get(a[0]);
+        if (!c || !(c.ai instanceof RemoteAI)) continue;
+        c.ai.snap = { x: a[1], y: a[2], z: a[3], yaw: a[4], vx: a[5], vz: a[6], av: a[7], h: a[8], f: a[9], st: a[11], th: a[12], br: a[13] };
+        c.ai.age = 0; c.ai.progress = a[10];
+        c.health = a[8]; c.nitro = a[14] ?? c.nitro;
+        if (a[9] & 4 && !c.ai.finished && this.route) { c.ai.finished = true; this.finished.push(c); }
+        if (!(a[9] & 1) && c.wrecked) { c.wrecked = false; c.sirenOn = undefined; }
+      }
+    } else if (m.t === 'wreck') {
+      const c = this.netCars.get(m.id);
+      if (!c || c.wrecked) return;
+      c.wrecked = true; c.wreckTime = this.time; c.health = 0;
+      c.angVel += (Math.random() - 0.5) * 6; c.vy = 5 + Math.random() * 3; c.grounded = false;
+      this.vfx.explosion(c.pos.x, c.pos.y, c.pos.z, c.vel.x, c.vel.y);
+      if (c.pos.distanceTo(this.player.pos) < 200) this.audio.takedown();
+      if (m.by && m.by === this.multi.myId) {
+        this.takedowns++; this.bounty += 2500; this.takedownReward();
+        this.notify('TAKEDOWN!', `${c.name} wrecked  +2500`, '#ff3060', true);
+        this.takedownCam(c);
+      } else {
+        const by = m.by && this.netCars.get(m.by);
+        this.notify(`${c.name} WRECKED`, by ? `by ${by.name}` : '', '#ffb400');
+      }
+    } else if (m.t === 'gone') {
+      for (const [id, c] of [...this.netCars]) {
+        if (c.net.owner !== m.from) continue;
+        this.netCars.delete(id);
+        this.racers = this.racers.filter((x) => x !== c);
+        this.removeCar(c);
+        if (c.net.human) this.notify('PLAYER LEFT', c.name, '#aaaaaa');
+      }
+    }
+  }
+  netSmooth(dt) {
+    const k = 1 - Math.exp(-dt * 9);
+    for (const c of this.netCars.values()) {
+      const ai = c.ai; if (!(ai instanceof RemoteAI) || !ai.snap) continue;
+      const s = ai.snap, a = Math.min(ai.age, 0.35);
+      const tx = s.x + s.vx * a, tz = s.z + s.vz * a;
+      const dx = tx - c.pos.x, dz = tz - c.pos.z;
+      if (dx * dx + dz * dz > 144) { c.pos.set(tx, s.y, tz); c.yaw = s.yaw; c.vel.set(s.vx, s.vz); continue; }
+      c.pos.x += dx * k; c.pos.z += dz * k;
+      if (!c.grounded || Math.abs(s.y - c.pos.y) > 3) c.pos.y += (s.y - c.pos.y) * k;
+      c.yaw = wrapAngle(c.yaw + wrapAngle(s.yaw + s.av * a - c.yaw) * k);
+      c.vel.x += (s.vx - c.vel.x) * k; c.vel.y += (s.vz - c.vel.y) * k;
+      c.angVel = s.av;
+      c.nitroActive = !!(s.f & 2);
+    }
+  }
+  multiRules(dt) {
+    // host keeps free-roam bots circulating along the race loop
+    if (this.multi.host === this.multi.myId && this.mode === 'free') {
+      for (const c of this.netCars.values()) {
+        if (!c.net.bot || !(c.ai instanceof RacerAI)) continue;
+        if (c.ai.progress > this.botRoute.length - 120 || (c.wrecked && this.time - c.wreckTime > 6)) {
+          const p = pointAtDist(this.botRoute, 40, {});
+          c.place(p.x + -p.dz * c.ai.lane, p.z + p.dx * c.ai.lane, Math.atan2(p.dx, p.dz), 10);
+          c.ai.idx = 0; c.ai.progress = 0; c.ai.finished = false;
+          c.wrecked = false; c.health = 1;
+        }
+      }
+    }
+    // free-roam: respawn instead of ending the session
+    if (this.respawnT > 0) {
+      this.respawnT -= dt;
+      if (this.respawnT <= 0) {
+        const pl = this.player;
+        pl.wrecked = false; pl.health = 1; pl.nitro = Math.max(pl.nitro, 0.5); pl.flatTimer = 0; pl.empTimer = 0;
+        this.resetPlayer();
+        this.state = 'playing';
+      }
+    }
+  }
+  softFail(reason) {
+    // multiplayer free roam: losing doesn't end the session
+    const pl = this.player;
+    this.notify(reason === 'busted' ? 'BUSTED' : 'WRECKED', 'Respawning…', '#ff3050', true);
+    if (reason === 'busted') { this.audio.busted(); this.bounty = Math.round(this.bounty * 0.5); }
+    this.pursuit = false; this.bust = 0; this.cooldown = 20; this.heat = 1; this.pursuitTime = 0;
+    for (const c of [...this.cops]) { c.sirenOn = false; c.ai.target = null; c.ai.retire = true; }
+    pl.input.throttle = 0;
+    this.respawnT = 3;
   }
 
   startDemo() {
@@ -306,6 +485,7 @@ export class Game {
     let best = null, bs = 1e9;
     for (const r of this.racers) {
       if (r.wrecked || (r.ai && r.ai.finished) || (r === this.player && this.playerFinished)) continue;
+      if (!this.mine(r)) continue;
       let d = r.pos.distanceTo(cop.pos);
       if (r === this.player) d *= 0.45;
       if (d < bs) { bs = d; best = r; }
@@ -397,7 +577,8 @@ export class Game {
   }
   damage(car, amt, by) {
     if (car.wrecked || amt <= 0 || this.demo) return;
-    if (this.state !== 'playing') return;
+    if (this.state !== 'playing' && !(this.multi && car !== this.player)) return;
+    if (!this.mine(car)) return; // the owner simulates its own damage
     // cap damage per crash event (0.4s window) so multi-substep contacts don't stack
     const cap = car === this.player ? 0.3 : 0.6;
     if (!car.dmgWin || this.time - car.dmgWin.t > 0.4) car.dmgWin = { t: this.time, sum: 0 };
@@ -414,8 +595,10 @@ export class Game {
     this.vfx.explosion(car.pos.x, car.pos.y, car.pos.z, car.vel.x, car.vel.y);
     const pl = this.player;
     const byPlayer = by === pl;
+    if (this.multi && car.net && this.multi.net) this.multi.net.send({ t: 'wreck', id: car.net.id, by: by?.net?.id || null });
     if (car.pos.distanceTo(pl.pos) < 200) this.audio.takedown();
     if (car === pl) {
+      if (this.multi && this.mode === 'free') { this.softFail('wrecked'); return; }
       this.endGame(this.mode === 'cop' ? 'wrecked_cop' : 'wrecked');
       return;
     }
@@ -562,13 +745,13 @@ export class Game {
       this.physics(dtReal * 0.0001);
     }
 
-    if (this.state === 'playing' || this.state === 'ending') {
+    if (this.state === 'playing' || this.state === 'ending' || (this.multi && this.state === 'result')) {
       this.time += dt;
       if (this.state === 'playing') this.raceTime += dt;
       // player input
       if (this.demo) { /* AI drives */ }
-      else if (this.state === 'playing' && !pl.wrecked) {
-        const d = input.drive(dtReal);
+      else if (this.state === 'playing' && !pl.wrecked && this.respawnT <= 0) {
+        const d = this.inputLocked ? { steer: 0, throttle: 0, brake: 0, handbrake: 0, nitro: 0 } : input.drive(dtReal);
         Object.assign(pl.input, d);
         if (pl.nitroActive === false && d.nitro && pl.nitro > 0.05 && !this._nitroWas) { this.audio.nitroStart(); this.rig.addShake(0.3); }
         this._nitroWas = d.nitro && pl.nitro > 0.05;
@@ -578,6 +761,7 @@ export class Game {
       // AI
       for (const c of this.cars) if (c.ai && (c !== pl || this.demo)) c.ai.update(dt, this);
       this.physics(dt);
+      if (this.multi) { this.netSmooth(dt); this.multiRules(dt); this.netSend(dtReal); }
       if (this.demo) this.demoRules(dt); else this.rules(dt);
       this.updateTraffic(dt);
       this.updateSpikes(dt);
@@ -950,9 +1134,10 @@ export class Game {
 
   endGame(reason) {
     if (this.state === 'ending' || this.state === 'result') return;
+    if (this.multi && this.mode === 'free' && (reason === 'busted' || reason === 'wrecked')) { if (this.respawnT <= 0) this.softFail(reason); return; }
     this.state = 'ending';
     const pl = this.player;
-    this.result = { reason, time: this.raceTime, place: this.playerPlace || this.position, takedowns: this.takedowns, bounty: Math.round(this.bounty), maxSpeed: this.maxSpeed * 3.6, busted: this.bustedRacers, escaped: this.escapedRacers, escapes: this.escapes, heat: this.heat };
+    this.result = { reason, time: this.raceTime, place: this.playerPlace || this.position, takedowns: this.takedowns, bounty: Math.round(this.bounty), maxSpeed: this.maxSpeed * 3.6, busted: this.bustedRacers, escaped: this.escapedRacers, escapes: this.escapes, heat: this.heat, total: this.racers.length, multi: !!this.multi };
     if (reason === 'busted') { this.audio.busted(); this.notify('BUSTED', 'You were arrested…', '#ff3050', true); this.radio('Suspect is in custody. Good work everyone.'); }
     else if (reason === 'wrecked' || reason === 'wrecked_cop') { this.audio.busted(); this.notify('WRECKED', 'Vehicle wrecked', '#ff3050', true); }
     else if (reason === 'finish') { this.audio.victory(); this.notify(this.playerPlace === 1 ? 'VICTORY!' : `FINISH  P${this.playerPlace}`, fmtTime(this.raceTime), '#30ff90', true); }
@@ -991,20 +1176,40 @@ export class Game {
   updateAudio(dt) {
     const pl = this.player; const a = this.audio;
     if (!a.ready) return;
+    const camR = new THREE.Vector3(); this.camera.getWorldDirection(camR);
     const sir = [];
     const cops = this.cops.filter((c) => !c.wrecked && c.sirenOn !== false);
     if (pl.police) cops.unshift(pl);
     cops.sort((x, y) => x.pos.distanceToSquared(pl.pos) - y.pos.distanceToSquared(pl.pos));
-    const camR = new THREE.Vector3(); this.camera.getWorldDirection(camR);
-    for (const c of cops.slice(0, 2)) {
+    for (const c of cops.slice(0, 4)) {
       const dx = c.pos.x - pl.pos.x, dz = c.pos.z - pl.pos.z, d = Math.hypot(dx, dz) || 1;
-      const gain = c === pl ? 0.55 : clamp(1 - d / 420, 0, 1) ** 1.6;
+      const gain = c === pl ? 0.62 : clamp(1 - d / 500, 0, 1) ** 1.5;
       const vrel = ((c.vel.x - pl.vel.x) * dx + (c.vel.y - pl.vel.y) * dz) / d;
       const pan = (dx * -camR.z + dz * camR.x) / d;
-      sir.push({ gain, vrel: c === pl ? 0 : vrel, pan: c === pl ? 0 : -pan, mode: c.id % 2 === 0 && d < 60 ? 1 : 0 });
+      let mode = c.id % 3 === 2 ? 2 : c.id % 2;
+      if (d < 42 && this.pursuit) mode = d < 22 ? 3 : 1;
+      sir.push({ gain, dist: c === pl ? 0 : d, vrel: c === pl ? 0 : vrel, pan: c === pl ? 0 : -pan, mode });
     }
+    const others = [];
+    for (const c of this.cars) {
+      if (c === pl || c.wrecked) continue;
+      const dx = c.pos.x - pl.pos.x, dz = c.pos.z - pl.pos.z, d2 = dx * dx + dz * dz;
+      if (d2 > 140 * 140) continue;
+      const d = Math.sqrt(d2) || 1;
+      const vrel = ((c.vel.x - pl.vel.x) * dx + (c.vel.y - pl.vel.y) * dz) / d;
+      const pan = (dx * -camR.z + dz * camR.x) / d;
+      others.push({ d, gain: clamp(1 - d / 130, 0, 1) ** 1.7, vrel, pan: -pan, rpm: c.rpm || 0.35, thr: c.input?.throttle ?? 0.5, kind: c.spec.kind });
+    }
+    others.sort((x, y) => x.d - y.d);
+    const fp = (this.rig.mode === 'cockpit' || this.rig.mode === 'hood') && !this.rig.cine;
     const active = !this.demo && (this.state === 'playing' || this.state === 'countdown' || this.state === 'ending');
-    a.update(dt, { active, rpm: pl.rpm, throttle: pl.input.throttle, speed: pl.speed, skid: pl.skidAmt || 0, offroad: pl.offroad && pl.grounded, nitro: pl.nitroActive, shifted: pl.shifted, sirens: sir });
+    a.update(dt, {
+      active, rpm: pl.rpm, throttle: pl.input.throttle, brake: pl.input.brake, handbrake: pl.input.handbrake,
+      speed: pl.speed, vF: pl.vF, gear: pl.gear, shiftTimer: pl.shiftTimer || 0,
+      skid: pl.skidAmt || 0, slip: Math.abs(pl.slip || 0), drifting: pl.drifting,
+      offroad: pl.offroad && pl.grounded, grounded: pl.grounded, flat: pl.flatTimer > 0,
+      nitro: pl.nitroActive, shifted: pl.shifted, kind: pl.spec.kind, fp, sirens: sir, others: others.slice(0, 4),
+    });
     pl.shifted = 0;
     // music intensity
     if (a.music && this.state === 'playing') {

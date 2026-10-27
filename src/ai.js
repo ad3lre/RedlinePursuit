@@ -79,7 +79,8 @@ export class RacerAI {
     let desired = Math.min(car.spec.top, curvatureSpeed(this.route, this.progress, 26 * car.spec.steer)) * this.skill;
     // rubber band relative to player
     const pl = game.player;
-    if (pl && game.mode !== 'cop') {
+    if (game.multi && game.mode === 'free') car.boost = 1;
+    else if (pl && game.mode !== 'cop') {
       const pp = game.playerProgress ?? this.progress;
       const gap = pp - this.progress;
       desired *= 1 + clamp(gap / 900, -0.12, 0.14);
