@@ -101,7 +101,7 @@ npm run build      # node build.mjs -> game.js (glTF models embedded)
 ```
 
 ## 🚗 Realistic car assets (work in progress)
-Supercar-class cars (`super` / `gt` / `muscle`) use real glTF models instead of procedural boxes (`src/carAssets.js`, `src/carModel.js`). Paint shader, liveries, damage, lights and sirens are unchanged. Sedan / SUV / truck are still procedural.
+Supercar-class cars (`super` = Ferrari 458, `gt` = Khronos Car Concept, `muscle` = Ferrari 458 for now) use real glTF models instead of procedural boxes (`src/carAssets.js`, `src/carModel.js`). Paint shader, liveries, damage, lights and sirens are unchanged. Sedan / SUV / truck are still procedural.
 Credits: `assets/CREDITS.md`. Tools: `tools/optimize.mjs`, `tools/inspect.mjs`, `tools/shot.mjs` (headless screenshots).
 
 ---

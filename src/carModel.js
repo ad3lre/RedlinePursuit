@@ -53,7 +53,7 @@ const PROFILES = {
 const GLB_MODELS = {
   super: { model: 'ferrari', L: 4.53, W: 1.98, roofH: 1.14, belt: 0.82, hoodFront: 0.92, wsBase: 0.55, roofF: -0.05, roofR: -1.0, rearWin: -1.7, deck: 0.98, tail: 0.95, spoiler: false, cabinW: 1.5, eye: { x: 0.36, y: 1.0, z: -0.12 }, head: { x: 0.66, y: 0.66, z: 2.0 }, tailL: { x: 0.68, y: 0.86, z: -2.2 } },
 };
-GLB_MODELS.gt = { ...GLB_MODELS.super };
+GLB_MODELS.gt = { model: 'concept', L: 4.4, W: 2.05, roofH: 1.2, belt: 0.85, hoodFront: 0.9, wsBase: 0.7, roofF: 0.0, roofR: -1.0, rearWin: -1.7, deck: 0.98, tail: 0.95, spoiler: false, cabinW: 1.5 };
 GLB_MODELS.muscle = { ...GLB_MODELS.super };
 
 function bodyShape(p) {
@@ -175,22 +175,27 @@ function buildGLBCar(kind, opts) {
   const cfg = GLB_MODELS[kind];
   const T = getTemplate(cfg.model, opts.lod === 'lo' ? 'lo' : 'hi') || getTemplate(cfg.model, 'hi');
   const p = { ...cfg, wheelR: T.wheelR, wb: (T.frontZ - T.rearZ) / 2 };
+  if (!p.eye && T.steer) p.eye = { x: T.steer.center.x, y: T.steer.center.y + 0.1, z: T.steer.center.z - 0.45 };
+  p.L = T.size.z; p.W = Math.min(T.size.x, cfg.W + 0.1);
   const root = new THREE.Group(); const body = new THREE.Group(); root.add(body);
   const paint = makePaint(opts.color ?? 0xcc1010, opts.livery || 'plain', opts.color2 ?? 0xffffff);
   paint.side = THREE.DoubleSide; // lets the cockpit camera see the hood/roof from inside
   const tailMat = new THREE.MeshStandardMaterial({ color: 0x300000, emissive: 0xff1010, emissiveIntensity: 1.2, transparent: true, opacity: 0.92, roughness: 0.2 });
-  const pick = (mat) => (mat.name === 'Body_Color' ? paint : mat.name === 'Taillight_Glass' ? tailMat : mat);
+  const D = T.def;
+  const pick = (mat) => (D.paintMat.test(mat.name) ? paint : D.tailMat.test(mat.name) ? tailMat : mat.transmission > 0 ? sh.glass : mat);
   let glassMesh = null;
   for (const it of T.body) {
     const m = new THREE.Mesh(it.geo, pick(it.mat)); body.add(m);
-    if (it.mat.name === 'Glass_Gray') glassMesh = m;
+    if (D.glassMat.test(it.mat.name)) glassMesh = m;
   }
   const parts = [glassMesh].filter(Boolean);
   const hl = p.L / 2;
   const heads = [];
   for (const sx of [-1, 1]) {
-    const hs = sprite(sh.glowW, 0.9, 0xfff2dd); hs.material.opacity = 0.55; hs.position.set(sx * cfg.head.x, cfg.head.y, cfg.head.z); body.add(hs); heads.push(hs);
-    const ts = sprite(sh.glowR, 0.55); ts.material.opacity = 0.7; ts.position.set(sx * cfg.tailL.x, cfg.tailL.y, cfg.tailL.z); body.add(ts); heads.push(ts);
+    const H = cfg.head ? { x: sx * cfg.head.x, y: cfg.head.y, z: cfg.head.z } : (T.heads && T.heads[sx]) || { x: sx * 0.7, y: 0.7, z: p.L / 2 };
+    const Tl = cfg.tailL ? { x: sx * cfg.tailL.x, y: cfg.tailL.y, z: cfg.tailL.z } : (T.tails && T.tails[sx]) || { x: sx * 0.7, y: 0.8, z: -p.L / 2 };
+    const hs = sprite(sh.glowW, 0.9, 0xfff2dd); hs.material.opacity = 0.55; hs.position.set(H.x, H.y, H.z + 0.1); body.add(hs); heads.push(hs);
+    const ts = sprite(sh.glowR, 0.55); ts.material.opacity = 0.7; ts.position.set(Tl.x, Tl.y, Tl.z - 0.1); body.add(ts); heads.push(ts);
   }
   const siren = {};
   if (opts.police) addPoliceGear(body, p, hl, siren);

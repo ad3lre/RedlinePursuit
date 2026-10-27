@@ -7,8 +7,15 @@ import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.j
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import ferrariHi from '../assets/models/ferrari_hi.glb';
 import ferrariLo from '../assets/models/ferrari_lo.glb';
+import conceptHi from '../assets/models/concept_hi.glb';
+import conceptLo from '../assets/models/concept_lo.glb';
 
-const SOURCES = { 'ferrari:hi': ferrariHi, 'ferrari:lo': ferrariLo };
+const SOURCES = { 'ferrari:hi': ferrariHi, 'ferrari:lo': ferrariLo, 'concept:hi': conceptHi, 'concept:lo': conceptLo };
+// Per-model node/material mapping. rotY: radians to turn the model so its nose points +Z (game forward).
+export const MODEL_DEFS = {
+  ferrari: { rotY: Math.PI, wheelNode: /^wheel_(fl|fr|rl|rr)$/, frontWheel: /^wheel_f/, tireMesh: /tire/i, steer: /^steering_wheel$/, paintMat: /^Body_Color$/, glassMat: /^Glass_Gray$/, tailMat: /^Taillight_Glass$/, tailPaintCombine: false },
+  concept: { rotY: 0, wheelNode: /^Wheel(Front|Rear)(L|R)$/, frontWheel: /^WheelFront/, tireMesh: null, steer: /^InteriorSteeringCylinder$/, paintMat: /^Paint [12] /, glassMat: /^Glass$/, tailMat: /^Brakelight$/, headMat: /^Headlight$/ },
+};
 const templates = {};
 
 const parse = (buf) => new Promise((res, rej) => {
@@ -17,6 +24,8 @@ const parse = (buf) => new Promise((res, rej) => {
   l.parse(ab, '', res, rej);
 });
 
+const MAPS = ['map', 'aoMap', 'lightMap', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'clearcoatMap', 'clearcoatNormalMap', 'clearcoatRoughnessMap', 'transmissionMap', 'alphaMap', 'bumpMap'];
+const usesUV1 = (m) => MAPS.some((k) => m[k] && m[k].channel === 1);
 function bake(mesh) {
   // flatten (quantized / interleaved) attributes into plain Float32 so merging works
   const src = mesh.geometry, g = new THREE.BufferGeometry();
@@ -27,6 +36,7 @@ function bake(mesh) {
   };
   take('position', 3);
   if (src.attributes.normal) take('normal', 3);
+  if (src.attributes.uv1) take('uv1', 2); else if (usesUV1(mesh.material)) g.setAttribute('uv1', new THREE.BufferAttribute(new Float32Array(src.attributes.position.count * 2), 2));
   if (src.attributes.uv) take('uv', 2); else g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(src.attributes.position.count * 2), 2));
   if (src.index) g.setIndex(new THREE.BufferAttribute(new Uint32Array(src.index.array), 1));
   g.applyMatrix4(mesh.matrixWorld);
@@ -47,15 +57,20 @@ function mergeBy(list, center) {
   return out;
 }
 
-function prepare(gltf) {
-  const wrap = new THREE.Group(); wrap.rotation.y = Math.PI; // model faces -Z, the game drives +Z
+function prepare(gltf, def) {
+  const wrap = new THREE.Group(); wrap.rotation.y = def.rotY; // orient so the nose points +Z (game forward)
   wrap.add(gltf.scene); wrap.updateMatrixWorld(true);
-  // centre the wheelbase on z=0 (game physics pivots about the axle midpoint)
-  const wp = (n) => gltf.scene.getObjectByName(n).getWorldPosition(new THREE.Vector3());
-  wrap.position.z = -(wp('wheel_fl').z + wp('wheel_rl').z) / 2; wrap.updateMatrixWorld(true);
+  const isWheelNode = (n) => def.wheelNode.test(n.name);
+  const wheelNodes = []; gltf.scene.traverse((o) => { if (isWheelNode(o)) wheelNodes.push(o); });
+  // ground the tyres on y=0 and centre the wheelbase on z=0 (game physics pivots about the axle midpoint)
+  const wb = new THREE.Box3(); wheelNodes.forEach((n) => wb.expandByObject(n));
+  const wc = (n) => new THREE.Box3().setFromObject(n).getCenter(new THREE.Vector3());
+  const fz = wheelNodes.filter((n) => def.frontWheel.test(n.name)).map((n) => wc(n).z), rz = wheelNodes.filter((n) => !def.frontWheel.test(n.name)).map((n) => wc(n).z);
+  const avg = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+  wrap.position.y = -wb.min.y; wrap.position.z = -(avg(fz) + avg(rz)) / 2; wrap.updateMatrixWorld(true);
+  const wheelOf = (o) => { for (let n = o; n; n = n.parent) if (isWheelNode(n)) return n; return null; };
+  const steerOf = (o) => { for (let n = o; n; n = n.parent) if (def.steer.test(n.name)) return n; return null; };
   const bodyList = [], wheelDefs = {}, steerList = [];
-  const wheelOf = (o) => { for (let n = o; n; n = n.parent) if (/^wheel_(fl|fr|rl|rr)$/.test(n.name)) return n; return null; };
-  const steerOf = (o) => { for (let n = o; n; n = n.parent) if (n.name === 'steering_wheel') return n; return null; };
   gltf.scene.traverse((o) => {
     if (!o.isMesh) return;
     const item = { geo: bake(o), mat: o.material, name: o.name };
@@ -68,11 +83,12 @@ function prepare(gltf) {
   const size = box.getSize(new THREE.Vector3());
   const wheels = [];
   for (const [name, items] of Object.entries(wheelDefs)) {
-    const tire = items.find((i) => /tire/i.test(i.name)) || items[0];
-    tire.geo.computeBoundingBox();
-    const c = tire.geo.boundingBox.getCenter(new THREE.Vector3());
-    const r = tire.geo.boundingBox.getSize(new THREE.Vector3()).y / 2;
-    wheels.push({ name, side: Math.sign(c.x), center: c, radius: r, parts: mergeBy(items, c), front: /^wheel_f/.test(name) });
+    const tires = items.filter((i) => /tire/i.test(i.name) || /tire/i.test(i.mat.name));
+    const ref = tires.length ? tires : items;
+    const bb = new THREE.Box3(); ref.forEach((i) => { i.geo.computeBoundingBox(); bb.union(i.geo.boundingBox); });
+    const c = bb.getCenter(new THREE.Vector3());
+    const sz = bb.getSize(new THREE.Vector3());
+    wheels.push({ name, side: Math.sign(c.x), center: c, radius: Math.max(sz.y, sz.z) / 2, parts: mergeBy(items, c), front: def.frontWheel.test(name) });
   }
   let steer = null;
   if (steerList.length) {
@@ -80,13 +96,25 @@ function prepare(gltf) {
     const c = bb.getCenter(new THREE.Vector3());
     steer = { center: c, parts: mergeBy(steerList, c) };
   }
-  const frontZ = wheels.filter((w) => w.front).reduce((a, w) => a + w.center.z, 0) / 2;
-  const rearZ = wheels.filter((w) => !w.front).reduce((a, w) => a + w.center.z, 0) / 2;
-  return { body: mergeBy(bodyList), wheels, steer, size, box, frontZ, rearZ, wheelR: wheels[0].radius, track: Math.abs(wheels[0].center.x) };
+  const frontZ = avg(wheels.filter((w) => w.front).map((w) => w.center.z));
+  const rearZ = avg(wheels.filter((w) => !w.front).map((w) => w.center.z));
+  const body = mergeBy(bodyList);
+  // locate lamp clusters (per side) so the glow sprites sit on the real lamps
+  const lamp = (re) => {
+    const out = {};
+    for (const sx of [-1, 1]) {
+      const bb = new THREE.Box3();
+      for (const it of body) { if (!re.test(it.mat.name)) continue; const p = it.geo.attributes.position; for (let i = 0; i < p.count; i++) if (Math.sign(p.getX(i)) === sx) bb.expandByPoint(new THREE.Vector3(p.getX(i), p.getY(i), p.getZ(i))); }
+      if (!bb.isEmpty()) { const c = bb.getCenter(new THREE.Vector3()); out[sx] = { x: c.x, y: c.y, z: sx > 0 ? bb.max.z : bb.max.z }; out[sx].z = bb.max.z > 0 && Math.abs(bb.max.z) > Math.abs(bb.min.z) ? bb.max.z : bb.min.z; }
+    }
+    return out;
+  };
+  const heads = def.headMat ? lamp(def.headMat) : null, tails = def.tailMat ? lamp(def.tailMat) : null;
+  return { def, body, wheels, steer, size, box, frontZ, rearZ, wheelR: avg(wheels.map((w) => w.radius)), track: Math.abs(wheels[0].center.x), heads, tails };
 }
 
 export async function loadCarAssets() {
-  await Promise.all(Object.entries(SOURCES).map(async ([k, buf]) => { templates[k] = prepare(await parse(buf)); }));
+  await Promise.all(Object.entries(SOURCES).map(async ([k, buf]) => { templates[k] = prepare(await parse(buf), MODEL_DEFS[k.split(':')[0]]); }));
 }
 export const hasGLB = (model, lod) => !!templates[model + ':' + lod];
 export const getTemplate = (model, lod) => templates[model + ':' + lod];

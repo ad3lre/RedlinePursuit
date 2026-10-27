@@ -4,7 +4,8 @@
 // simplify on the welded topology, then re-emit survivors using the attributes of a representative vertex.
 import { NodeIO } from '@gltf-transform/core';
 import { ALL_EXTENSIONS } from '@gltf-transform/extensions';
-import { prune, meshopt, reorder, dedup } from '@gltf-transform/functions';
+import { prune, meshopt, reorder, dedup, textureCompress } from '@gltf-transform/functions';
+import sharp from 'sharp';
 import { MeshoptEncoder, MeshoptDecoder, MeshoptSimplifier } from 'meshoptimizer';
 import draco3d from 'draco3dgltf';
 const [inp, out, ratioArg, dropArg] = process.argv.slice(2);
@@ -36,6 +37,6 @@ if (ratio < 1) for (const mesh of root.listMeshes()) for (const prim of mesh.lis
   }
   prim.setIndices(doc.createAccessor().setType('SCALAR').setArray(ni).setBuffer(buffer));
 }
-await doc.transform(prune(), dedup(), reorder({ encoder: MeshoptEncoder }), meshopt({ encoder: MeshoptEncoder, level: 'medium' }));
+await doc.transform(textureCompress({ encoder: sharp, targetFormat: 'webp', resize: [1024, 1024], quality: 82 }), prune(), dedup(), reorder({ encoder: MeshoptEncoder }), meshopt({ encoder: MeshoptEncoder, level: 'medium' }));
 console.log('tris after', count());
 await io.write(out, doc);
