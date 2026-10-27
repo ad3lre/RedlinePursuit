@@ -208,8 +208,14 @@ export class World {
     const nt = TX.waterNormalTexture();
     nt.repeat.set(600, 600);
     const mat = new THREE.MeshStandardMaterial({
-      color: 0x0d2a3a, roughness: 0.06, metalness: 0.1, normalMap: nt, normalScale: new THREE.Vector2(0.35, 0.35), envMapIntensity: 1.2,
+      color: 0x0d2a3a, roughness: 0.1, metalness: 0.1, normalMap: nt, normalScale: new THREE.Vector2(0.35, 0.35), envMapIntensity: 1.2,
     });
+    // anti-sparkle: ripples fade to a flat mirror with distance and roughness rises toward the horizon, so far water is calm instead of noisy
+    mat.onBeforeCompile = (sh) => {
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <normal_fragment_maps>', THREE.ShaderChunk.normal_fragment_maps.replace('mapN.xy *= normalScale;', 'mapN.xy *= normalScale * (1.0 - smoothstep(35.0, 260.0, length(vViewPosition)));'))
+        .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n      roughnessFactor = mix(roughnessFactor, 0.3, smoothstep(80.0, 700.0, length(vViewPosition)));');
+    };
     const geo = new THREE.PlaneGeometry(40000, 40000);
     geo.rotateX(-Math.PI / 2);
     const mesh = new THREE.Mesh(geo, mat);

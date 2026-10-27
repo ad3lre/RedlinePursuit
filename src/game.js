@@ -413,7 +413,7 @@ export class Game {
     }
     if (car.role === 'cop') {
       if (byPlayer) {
-        this.takedowns++; this.bounty += 2500; pl.nitro = Math.min(1, pl.nitro + 0.35);
+        this.takedowns++; this.bounty += 2500; this.takedownReward();
         this.notify('TAKEDOWN!', 'Patrol car down  +2500', '#ff3060', true);
         this.radio(['Unit down! Unit down!', 'We lost a unit!', 'Officer down, requesting backup!'][Math.floor(Math.random() * 3)]);
         this.takedownCam(car);
@@ -421,14 +421,19 @@ export class Game {
     } else if (car.role === 'racer') {
       if (this.mode === 'cop') {
         this.bustedRacers++;
-        if (byPlayer) { this.takedowns++; pl.nitro = Math.min(1, pl.nitro + 0.4); this.takedownCam(car); }
+        if (byPlayer) { this.takedowns++; this.takedownReward(); this.takedownCam(car); }
         this.notify('BUSTED!', `${car.name} busted (${this.bustedRacers}/4)`, '#3aa0ff', true);
         this.radio('Suspect is down. Nice work.');
       } else {
         this.notify('RACER WRECKED', `${car.name} is out`, '#ffb400');
-        if (byPlayer) { this.takedowns++; pl.nitro = Math.min(1, pl.nitro + 0.3); this.takedownCam(car); }
+        if (byPlayer) { this.takedowns++; this.takedownReward(); this.takedownCam(car); }
       }
     }
+  }
+  takedownReward() {
+    const pl = this.player;
+    if (!pl || pl.wrecked) return;
+    pl.health = 1; pl.nitro = 1; pl.flatTimer = 0; pl.empTimer = 0;
   }
   takedownCam(car) {
     if (!this.settings.cinematic) { this.slowmo = 0.5; return; }

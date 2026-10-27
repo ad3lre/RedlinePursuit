@@ -118,7 +118,7 @@ function loop(now) {
   requestAnimationFrame(loop);
   const rawDt = (now - last) / 1000;
   let dt = Math.min(0.05, rawDt); last = now;
-  if (app === 'game' && !perfChecked && game.state === 'playing') {
+  if (app === 'game' && !perfChecked && game.state === 'playing' && !location.search.includes('noperf')) {
     perfT += rawDt; perfN++;
     if (perfT > 8) {
       perfChecked = true;
@@ -162,6 +162,9 @@ function loop(now) {
   u.uDamage.value = inGame ? Math.max(hud.dmgFlash * 0.8, low) : 0;
   const sg = inGame && game.sirenGlow;
   u.uSiren.value.set(sg ? sg.r : 0, sg ? sg.b : 0, sg ? sg.a : 0);
+  post.mb.strength = settings.speedFx && (app === 'game' || app === 'paused' ? !!pl && !game.demo : false) && app !== 'paused' ? 1 : 0;
+  if (pl) { post.mb.u.uCar.value.set(pl.pos.x, pl.pos.y + 0.8, pl.pos.z); post.mb.u.uCarR.value = Math.max(pl.dims.L * 0.5, pl.dims.W) + 0.9; }
+  u.uMB.value = post.mb.enabled && post.mb.strength ? 1 : 0;
   post.draw(dt);
   input.endFrame();
 }

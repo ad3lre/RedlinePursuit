@@ -138,6 +138,19 @@ function makeWheel(r, w, rimMat) {
   return g;
 }
 
+let blurDiscTex = null;
+function addBlurDisc(pivot, r, side) {
+  // translucent disc that fades in with speed: hides wagon-wheel strobing and reads as real spinning-wheel motion blur
+  if (!blurDiscTex) {
+    const c = document.createElement('canvas'); c.width = c.height = 128; const g = c.getContext('2d');
+    const gr = g.createRadialGradient(64, 64, 8, 64, 64, 62); gr.addColorStop(0, 'rgba(70,72,78,0.9)'); gr.addColorStop(0.55, 'rgba(40,41,45,0.95)'); gr.addColorStop(0.92, 'rgba(14,14,16,1)'); gr.addColorStop(1, 'rgba(14,14,16,0)');
+    g.fillStyle = gr; g.fillRect(0, 0, 128, 128); blurDiscTex = new THREE.CanvasTexture(c);
+  }
+  const m = new THREE.Mesh(new THREE.CircleGeometry(r * 0.97, 28), new THREE.MeshBasicMaterial({ map: blurDiscTex, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide, fog: true, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
+  m.rotation.y = Math.PI / 2; m.position.x = side * 0.14; m.visible = false; m.castShadow = false; m.renderOrder = 2;
+  pivot.add(m); return m;
+}
+
 function sprite(tex, size, color = 0xffffff) {
   const m = new THREE.SpriteMaterial({ map: tex, color, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, fog: true });
   const s = new THREE.Sprite(m); s.scale.set(size, size, 1);
@@ -208,9 +221,9 @@ function buildGLBCar(kind, opts) {
     const pivot = new THREE.Group(); pivot.position.set(w.center.x, w.center.y, w.center.z);
     const spin = new THREE.Group(); pivot.add(spin);
     for (const it of w.parts) spin.add(new THREE.Mesh(it.geo, opts.police && /rim|wheel/i.test(it.mat.name) ? sh.darkRim : it.mat));
-    root.add(pivot); wheels.push({ pivot, spin, front: w.front, side: w.side });
+    root.add(pivot); wheels.push({ pivot, spin, front: w.front, side: w.side, blur: addBlurDisc(pivot, T.wheelR, w.side) });
   }
-  root.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = false; } });
+  root.traverse((o) => { if (o.isMesh) { o.castShadow = !(o.material && o.material.transparent); o.receiveShadow = false; } });
   root.userData.sharedGeo = true;
   return { root, body, wheels, paint, tailMat, heads, siren, dims: { L: p.L, W: p.W, wheelR: p.wheelR, wb: p.wb, roofH: p.roofH }, profile: p, parts, glb: T, glbCfg: cfg };
 }
@@ -301,9 +314,9 @@ export function buildCar(kind, opts = {}) {
     const w = makeWheel(p.wheelR, 0.3, rimMat);
     pivot.add(w);
     root.add(pivot);
-    wheels.push({ pivot, spin: w, front, side: sx });
+    wheels.push({ pivot, spin: w, front, side: sx, blur: addBlurDisc(pivot, p.wheelR, sx) });
   }
-  root.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = false; } });
+  root.traverse((o) => { if (o.isMesh) { o.castShadow = !(o.material && o.material.transparent); o.receiveShadow = false; } });
   return { root, body, wheels, paint, tailMat, heads, siren, dims: { L: p.L, W: p.W, wheelR: p.wheelR, wb: p.wb, roofH: p.roofH || 2.5 }, profile: p, parts };
 }
 

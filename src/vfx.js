@@ -230,6 +230,18 @@ export class VFX {
     if (car.offroad && sp > 8 && car.grounded && Math.random() < dt * sp * 0.6) {
       this.dust(car.pos.x - fx * L, car.pos.y, car.pos.z - fz * L, car.vel.x, car.vel.y, clamp(sp / 40, 0.3, 1));
     }
+    // exhaust: backfire pops on upshift / lift-off, light smoke puffs on hard launch
+    const exL = car.dims.L / 2 + 0.05;
+    if (car.shifted === 1 && car.input.throttle > 0.6 && sp > 10 && car.role === 'player') {
+      for (const s of [-0.42, 0.42]) {
+        const x = car.pos.x - fx * exL + rx * s, z = car.pos.z - fz * exL + rz * s;
+        for (let k = 0; k < 3; k++) this.glow.emit({ x, y: car.pos.y + 0.32, z, vx: -fx * (7 + k * 3) + car.vel.x + (Math.random() - 0.5) * 2, vy: 0.5 + Math.random(), vz: -fz * (7 + k * 3) + car.vel.y + (Math.random() - 0.5) * 2, life: 0.09 + Math.random() * 0.07, s0: 0.35, s1: 0.08, a: 1, r: 4, g: 1.6, b: 0.4, drag: 2 });
+      }
+    }
+    if (car.grounded && car.input.throttle > 0.9 && car.vF > 1 && car.vF < 22 && Math.random() < dt * 14) {
+      const s = Math.random() < 0.5 ? -0.42 : 0.42;
+      this.tireSmoke(car.pos.x - fx * exL + rx * s, car.pos.y + 0.3, car.pos.z - fz * exL + rz * s, car.vel.x - fx * 2, car.vel.y - fz * 2, 0.12, true);
+    }
     if (car.nitroActive) {
       for (const s of [-0.45, 0.45]) {
         const x = car.pos.x - fx * (car.dims.L / 2 + 0.15) + rx * s, z = car.pos.z - fz * (car.dims.L / 2 + 0.15) + rz * s;

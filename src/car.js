@@ -2,6 +2,10 @@
 import * as THREE from 'three';
 import { buildCar, buildInterior } from './carModel.js';
 import { clamp, lerp, damp, wrapAngle } from './util.js';
+import { glowTexture } from './textures.js';
+
+let blobTex = null, blurTex = null;
+const blobMat = () => (blobTex ||= glowTexture('rgba(0,0,0,0.9)', 'rgba(0,0,0,0)', 128));
 
 export const PLAYER_CARS = [
   { id: 'viper', name: 'VIPER GT', kind: 'super', top: 88, accel: 17.5, grip: 9.5, steer: 1.0, mass: 1.0, armor: 1.0, color: 0xc8101a, color2: 0x101010, livery: 'stripe', desc: 'Balanced supercar' },
@@ -37,6 +41,12 @@ export class Car {
     });
     game.scene.add(this.model.root);
     this.dims = this.model.dims;
+    // soft ambient-occlusion blob under the car: grounds it far better than a 10 cm/texel shadow map can
+    const blob = new THREE.Mesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ map: blobMat(), transparent: true, depthWrite: false, opacity: 0.8, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6 }));
+    blob.scale.set(this.dims.W * 1.45, 1, this.dims.L * 1.25); blob.position.y = -0.14; blob.renderOrder = 3;
+    this.model.root.add(blob); this.blob = blob;
+    // spring-damper suspension state (pitch / roll / heave), underdamped so it settles with a bounce
+    this.susp = { p: 0, pv: 0, r: 0, rv: 0, h: 0, hv: 0 };
     this.radius = Math.min(this.dims.W / 2 + 0.05, 1.15);
     this.circOff = this.dims.L / 2 - this.radius * 0.9;
     this.mass = spec.mass || (spec.kind === 'truck' ? 3 : spec.kind === 'suv' ? 1.5 : 1.1);
@@ -168,6 +178,7 @@ export class Car {
     const gap = this.pos.y - g;
     const stick = wasGrounded && gap < 0.9 && (this.vy - slopeV) < 5.5;
     if (this.pos.y <= g || stick) {
+      if (!wasGrounded) { const imp = clamp(-this.vy, 0, 25); this.susp.hv -= imp * 0.11; this.susp.pv += (Math.random() - 0.5) * imp * 0.004; }
       if (!wasGrounded && this.airTime > 0.35) this.game.onLanding(this, this.airTime);
       this.pos.y = g; this.vy = clamp(slopeV, -30, 14); this.grounded = true; this.airTime = 0;
     } else if (gap > 0.25) { this.grounded = false; this.airTime += dt; }
@@ -260,15 +271,35 @@ export class Car {
     m.root.rotation.y = this.yaw;
     m.root.rotation.x = this.grounded ? -this.vPitch : this.pitch;
     m.root.rotation.z = this.grounded ? this.vRoll : this.roll;
-    // body lean (suspension)
-    const bp = clamp(-this.accelLong * 0.004, -0.05, 0.05);
-    const br = clamp(this.accelLat * 0.006, -0.08, 0.08);
-    this.bodyPitch = dt ? damp(this.bodyPitch, bp, 6, dt) : bp;
-    this.bodyRoll = dt ? damp(this.bodyRoll, br, 6, dt) : br;
-    m.body.rotation.x = this.bodyPitch;
-    m.body.rotation.z = this.bodyRoll;
+    // body motion: real spring-damper on pitch / roll / heave. Squats on throttle, dives on brakes, rolls in corners,
+    // rebounds after bumps and landings, and shudders with the engine - so the car reads as a heavy object on springs.
+    const S = this.susp, sdt = Math.min(dt || 0, 0.033);
+    if (sdt > 0) {
+      const tp = clamp(-this.accelLong * 0.0046, -0.07, 0.07);
+      const tr = clamp(this.accelLat * 0.0068, -0.1, 0.1);
+      const rough = (this.offroad ? 1 : 0.18) * clamp(this.speed / 40, 0, 1);
+      const sub = 2, h = sdt / sub;
+      for (let i = 0; i < sub; i++) {
+        S.pv += ((tp - S.p) * 110 - S.pv * 11) * h; S.p += S.pv * h;
+        S.rv += ((tr - S.r) * 120 - S.rv * 11.5) * h; S.r += S.rv * h;
+        S.hv += ((0 - S.h) * 140 - S.hv * 13) * h; S.h += S.hv * h;
+      }
+      // road texture + engine vibration
+      const t = time * 1;
+      S.hv += (Math.sin(t * 61 + this.sirenPhase) * 0.5 + Math.sin(t * 97)) * 0.012 * rough;
+      S.pv += Math.sin(t * 43 + 1.7) * 0.004 * rough;
+      if (this.role === 'player' && this.grounded) S.h += Math.sin(t * (30 + this.rpm * 70)) * 0.0011 * (0.35 + this.rpm);
+      S.p = clamp(S.p, -0.12, 0.12); S.r = clamp(S.r, -0.16, 0.16); S.h = clamp(S.h, -0.14, 0.14);
+    }
+    this.bodyPitch = S.p; this.bodyRoll = S.r;
+    m.body.rotation.x = S.p;
+    m.body.rotation.z = S.r;
+    m.body.position.y = S.h;
+    if (this.blob) { this.blob.material.opacity = this.grounded ? 0.8 : clamp(0.8 - this.airTime * 1.2, 0.15, 0.8); this.blob.visible = this.visible; }
     // wheels
+    const blurA = clamp((Math.abs(this.vF) - 10) / 32, 0, 0.62);
     for (const w of m.wheels) {
+      if (w.blur) { w.blur.material.opacity = blurA; w.blur.visible = blurA > 0.02; }
       w.spin.rotation.x = this.wheelSpin;
       if (w.front) w.pivot.rotation.y = this.steerAngle * 1.2;
     }
