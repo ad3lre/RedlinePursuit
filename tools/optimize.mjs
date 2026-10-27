@@ -37,6 +37,6 @@ if (ratio < 1) for (const mesh of root.listMeshes()) for (const prim of mesh.lis
   }
   prim.setIndices(doc.createAccessor().setType('SCALAR').setArray(ni).setBuffer(buffer));
 }
-await doc.transform(textureCompress({ encoder: sharp, targetFormat: 'webp', resize: [1024, 1024], quality: 82 }), prune(), dedup(), reorder({ encoder: MeshoptEncoder }), meshopt({ encoder: MeshoptEncoder, level: 'medium' }));
+await doc.transform(textureCompress({ encoder: sharp, targetFormat: 'webp', resize: [+(process.env.TEX || 1024), +(process.env.TEX || 1024)], quality: 82 }), prune(), dedup(), reorder({ encoder: MeshoptEncoder }), meshopt({ encoder: MeshoptEncoder, level: 'medium' }));
 console.log('tris after', count());
 await io.write(out, doc);

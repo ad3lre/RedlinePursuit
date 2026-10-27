@@ -1,6 +1,6 @@
 // ===== Game orchestration: modes, pursuit rules, spawning, collisions =====
 import * as THREE from 'three';
-import { Car, PLAYER_CARS, RACER_COLORS, TRAFFIC_SPECS } from './car.js';
+import { Car, PLAYER_CARS, RACER_COLORS, TRAFFIC_SPECS, RIVAL_MODELS } from './car.js';
 import { RacerAI, CopAI, TrafficAI } from './ai.js';
 import { buildRoute, projectOnRoute, pointAtDist } from './roads.js';
 import { clamp, lerp, wrapAngle } from './util.js';
@@ -156,7 +156,8 @@ export class Game {
           if (i === pIdx) { place(pl, g[0], g[1]); return; }
           const ms = PLAYER_CARS[(carIdx + 1 + ri) % 3];
           const col = RACER_COLORS[ri % RACER_COLORS.length];
-          const r = this.addCar({ ...ms, top: ms.top * (0.985 + ri * 0.012) }, { role: 'racer', color: col[0], color2: col[1], livery: 'stripe', name: RACER_NAMES[ri] });
+          const rm = this.rivalModel(carIdx, ri);
+          const r = this.addCar({ ...ms, kind: rm.kind || ms.kind, top: ms.top * (0.985 + ri * 0.012) }, { role: 'racer', model: rm.model, color: col[0], color2: col[1], livery: 'stripe', name: RACER_NAMES[ri] });
           place(r, g[0], g[1]);
           r.ai = new RacerAI(r, route, 0.97 + ri * 0.02);
           r.ai.lane = g[1];
@@ -169,7 +170,8 @@ export class Game {
         for (let i = 0; i < 4; i++) {
           const ms = PLAYER_CARS[i % 3];
           const col = RACER_COLORS[i];
-          const r = this.addCar({ ...ms, top: ms.top * (0.99 + i * 0.008), armor: ms.armor * 1.0 }, { role: 'racer', color: col[0], color2: col[1], livery: 'stripe', name: RACER_NAMES[i] });
+          const rm = this.rivalModel(carIdx, i);
+          const r = this.addCar({ ...ms, kind: rm.kind || ms.kind, top: ms.top * (0.99 + i * 0.008), armor: ms.armor * 1.0 }, { role: 'racer', model: rm.model, color: col[0], color2: col[1], livery: 'stripe', name: RACER_NAMES[i] });
           place(r, 95 + Math.floor(i / 2) * 12, i % 2 ? 3.5 : -3.5);
           r.ai = new RacerAI(r, route, 0.99 + i * 0.012);
           r.ai.lane = i % 2 ? 3.5 : -3.5;
@@ -213,7 +215,7 @@ export class Game {
       const c = this.spawnCop({ x: q.x + (i ? 3 : -3) * -q.dz, z: q.z + (i ? 3 : -3) * q.dx, yaw: Math.atan2(q.dx, q.dz), speed: 28 });
       c.ai.target = pl;
     }
-    const r2 = this.addCar({ ...PLAYER_CARS[1] }, { role: 'racer', color: 0x1ec8ff, color2: 0x101010, livery: 'stripe', name: 'NOVA' });
+    const r2 = this.addCar({ ...PLAYER_CARS[1], kind: 'super' }, { role: 'racer', model: 'sport', color: 0x1ec8ff, color2: 0x101010, livery: 'stripe', name: 'NOVA' });
     const q = pointAtDist(route, start + 20, {});
     r2.place(q.x + 3 * -q.dz, q.z + 3 * q.dx, Math.atan2(q.dx, q.dz), 30);
     r2.ai = new RacerAI(r2, route, 0.97); r2.ai.idx = q.index; r2.ai.lane = 3;
@@ -224,6 +226,12 @@ export class Game {
   }
 
   // ---------------- spawning ----------------
+  // pick a rival model that differs from the player's car (and from other rivals where possible)
+  rivalModel(carIdx, i) {
+    const mine = PLAYER_CARS[carIdx % PLAYER_CARS.length].kind === 'super' ? 'ferrari' : PLAYER_CARS[carIdx % PLAYER_CARS.length].kind === 'gt' ? 'concept' : 'ferrari';
+    const pool = RIVAL_MODELS.filter((r) => r.model !== mine);
+    return pool[i % pool.length];
+  }
   spawnCop(pos, spec = COP_SPEC) {
     const c = this.addCar(spec, { role: 'cop' });
     c.ai = new CopAI(c, this);
@@ -236,9 +244,9 @@ export class Game {
     const nav = this.world.nav;
     const count = this.settings.quality === 0 ? 18 : 30;
     for (let i = 0; i < count; i++) {
-      const ts = TRAFFIC_SPECS[Math.floor(Math.random() * TRAFFIC_SPECS.length)];
+      let wsum = 0; for (const t of TRAFFIC_SPECS) wsum += t.w || 1; let wr = Math.random() * wsum; let ts = TRAFFIC_SPECS[0]; for (const t of TRAFFIC_SPECS) { wr -= t.w || 1; if (wr <= 0) { ts = t; break; } }
       const spec = { kind: ts.kind, top: 34, accel: 8, grip: 8, steer: 0.8, mass: ts.kind === 'truck' ? 3 : ts.kind === 'suv' ? 1.6 : 1.1, armor: 1 };
-      const c = this.addCar(spec, { role: 'traffic', color: ts.colors[Math.floor(Math.random() * ts.colors.length)], color2: 0xeeeeee, taxi: ts.taxi, livery: ts.taxi ? 'taxi' : 'plain' });
+      const c = this.addCar(spec, { role: 'traffic', model: ts.model, color: ts.colors[Math.floor(Math.random() * ts.colors.length)], color2: 0xeeeeee, taxi: ts.taxi, livery: ts.taxi ? 'taxi' : 'plain' });
       c.ai = new TrafficAI(c, this);
       this.traffic.push(c);
       this.respawnTraffic(c, true);

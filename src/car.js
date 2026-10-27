@@ -13,12 +13,22 @@ export const PLAYER_CARS = [
   { id: 'bruiser', name: 'BRUISER V8', kind: 'muscle', top: 85, accel: 19, grip: 8.8, steer: 0.95, mass: 1.45, armor: 1.5, color: 0xff7a00, color2: 0x111111, livery: 'split', desc: 'Ultimate ramming muscle car' },
 ];
 export const RACER_COLORS = [[0x1ec8ff, 0x101010], [0x9aff1e, 0x101010], [0xffd400, 0x101010], [0xa020ff, 0xffffff], [0xffffff, 0xff2050], [0x202020, 0xff6a00]];
+// Traffic uses the "Generic passenger car pack" models with their own baked textures (no recolour). `w` = spawn weight.
 export const TRAFFIC_SPECS = [
-  { kind: 'sedan', colors: [0x6a7078, 0x2a3a5a, 0x8a1c1c, 0xd8d8d8, 0x303030, 0x4a5a3a] },
-  { kind: 'suv', colors: [0x2a2a2a, 0x5a5a60, 0xb8b0a0, 0x3a4a6a] },
-  { kind: 'sedan', taxi: true, colors: [0xf4c400] },
-  { kind: 'truck', colors: [0xffffff, 0x1a4aa0, 0xa01a1a] },
+  { kind: 'sedan', model: 'sedan', w: 3, colors: [0x6a7078] },
+  { kind: 'sedan', model: 'hatchback', w: 3, colors: [0xe8d040] },
+  { kind: 'sedan', model: 'compact', w: 2, colors: [0x4cc0e0] },
+  { kind: 'sedan', model: 'wagon', w: 2, colors: [0x4a90a0] },
+  { kind: 'sedan', model: 'coupe', w: 1, colors: [0x2030c0] },
+  { kind: 'suv', model: 'suv', w: 2, colors: [0x202020] },
+  { kind: 'suv', model: 'offroad', w: 1, colors: [0x2a4a20] },
+  { kind: 'suv', model: 'minivan', w: 2, colors: [0x801818] },
+  { kind: 'suv', model: 'pickup', w: 2, colors: [0x1a6a2a] },
+  { kind: 'sedan', model: 'hatchback', taxi: true, w: 1, colors: [0xf4c400] },
+  { kind: 'truck', w: 1, colors: [0xffffff, 0x1a4aa0, 0xa01a1a] },
 ];
+// Models rivals drive (the player's own model is skipped so a rival never looks like a recoloured copy of you).
+export const RIVAL_MODELS = [{ model: 'sport' }, { model: 'concept', kind: 'gt' }, { model: 'coupe' }, { model: 'ferrari', kind: 'super' }, { model: 'wagon' }];
 
 const tmpV = new THREE.Vector3();
 const tmpN = new THREE.Vector3();
@@ -34,6 +44,7 @@ export class Car {
     const police = this.role === 'cop' || opts.police;
     this.police = police;
     this.model = buildCar(spec.kind, {
+      model: opts.model ?? spec.model,
       color: police ? 0x0b0b0d : opts.color ?? spec.color,
       color2: police ? 0xf2f2f2 : opts.color2 ?? spec.color2,
       livery: police ? 'police' : opts.livery ?? spec.livery ?? 'plain',
@@ -321,6 +332,7 @@ export class Car {
       this.flashA = flashA; this.flashB = flashB;
     }
     m.paint.userData.u.uDmg.value = clamp((1 - this.health) * 0.9, 0, 0.9);
+    if (m.dmgMats && m.dmgMats.length) { const k = 1 - clamp((1 - this.health) * 0.9, 0, 0.9) * 0.6; for (const dm of m.dmgMats) dm.color.setScalar(k); }
   }
 
   dispose() {

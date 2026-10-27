@@ -55,6 +55,7 @@ const GLB_MODELS = {
 };
 GLB_MODELS.gt = { model: 'concept', L: 4.4, W: 2.05, roofH: 1.2, belt: 0.85, hoodFront: 0.9, wsBase: 0.7, roofF: 0.0, roofR: -1.0, rearWin: -1.7, deck: 0.98, tail: 0.95, spoiler: false, cabinW: 1.5 };
 GLB_MODELS.muscle = { ...GLB_MODELS.super };
+for (const id of ['compact', 'coupe', 'hatchback', 'minivan', 'offroad', 'pickup', 'sedan', 'sport', 'suv', 'wagon']) GLB_MODELS[id] = { model: id, auto: true, hud: { compact: 0x4cc0e0, coupe: 0x2030c0, hatchback: 0xe8d040, minivan: 0x801818, offroad: 0x2a4a20, pickup: 0x1a6a2a, sedan: 0xb0a040, sport: 0xc81818, suv: 0x202020, wagon: 0x4a90a0 }[id] };
 
 function bodyShape(p) {
   const hl = p.L / 2;
@@ -185,28 +186,41 @@ function addPoliceGear(body, p, hl, siren) {
 
 function buildGLBCar(kind, opts) {
   const sh = S();
-  const cfg = GLB_MODELS[kind];
+  const cfg = { ...GLB_MODELS[kind] };
   const T = getTemplate(cfg.model, opts.lod === 'lo' ? 'lo' : 'hi') || getTemplate(cfg.model, 'hi');
+  if (cfg.auto) { // derive the hand-tuned profile numbers from the model's own bounds
+    const H = T.size.y, Lz = T.size.z;
+    Object.assign(cfg, { L: Lz, W: T.size.x, roofH: H, belt: H * 0.62, hoodFront: H * 0.55, wsBase: Lz * 0.12, roofF: Lz * 0.04, roofR: -Lz * 0.26, rearWin: -Lz * 0.38, deck: H * 0.6, tail: H * 0.6, spoiler: false, cabinW: T.size.x * 0.8, eye: { x: T.size.x * 0.2, y: H * 0.82, z: -Lz * 0.04 } });
+  }
   const p = { ...cfg, wheelR: T.wheelR, wb: (T.frontZ - T.rearZ) / 2 };
   if (!p.eye && T.steer) p.eye = { x: T.steer.center.x, y: T.steer.center.y + 0.1, z: T.steer.center.z - 0.45 };
-  p.L = T.size.z; p.W = Math.min(T.size.x, cfg.W + 0.1);
+  p.L = T.size.z; p.W = cfg.auto ? T.size.x : Math.min(T.size.x, cfg.W + 0.1);
   const root = new THREE.Group(); const body = new THREE.Group(); root.add(body);
   const paint = makePaint(opts.color ?? 0xcc1010, opts.livery || 'plain', opts.color2 ?? 0xffffff);
   paint.side = THREE.DoubleSide; // lets the cockpit camera see the hood/roof from inside
   const tailMat = new THREE.MeshStandardMaterial({ color: 0x300000, emissive: 0xff1010, emissiveIntensity: 1.2, transparent: true, opacity: 0.92, roughness: 0.2 });
   const D = T.def;
-  const pick = (mat) => (D.paintMat.test(mat.name) ? paint : D.tailMat.test(mat.name) ? tailMat : mat.transmission > 0 ? sh.glass : mat);
+  const dmgMats = [];
+  const pick = (mat) => {
+    if (D.paintMat && D.paintMat.test(mat.name)) return paint;
+    if (D.tailMat && D.tailMat.test(mat.name)) return tailMat;
+    if (mat.transmission > 0) return sh.glass;
+    if (D.keepTextures && opts.police && /^Body/i.test(mat.name)) return paint; // police livery repaints the body
+    if (D.keepTextures && /^Body/i.test(mat.name)) { const c = mat.clone(); dmgMats.push(c); return c; } // own copy so crash damage can darken just this car
+    return mat;
+  };
   let glassMesh = null;
   for (const it of T.body) {
     const m = new THREE.Mesh(it.geo, pick(it.mat)); body.add(m);
-    if (D.glassMat.test(it.mat.name)) glassMesh = m;
+    if (D.glassMat && D.glassMat.test(it.mat.name)) glassMesh = m;
   }
   const parts = [glassMesh].filter(Boolean);
+  if (cfg.hud !== undefined && !opts.police) paint.color.set(cfg.hud); // minimap / HUD colour
   const hl = p.L / 2;
   const heads = [];
   for (const sx of [-1, 1]) {
-    const H = cfg.head ? { x: sx * cfg.head.x, y: cfg.head.y, z: cfg.head.z } : (T.heads && T.heads[sx]) || { x: sx * 0.7, y: 0.7, z: p.L / 2 };
-    const Tl = cfg.tailL ? { x: sx * cfg.tailL.x, y: cfg.tailL.y, z: cfg.tailL.z } : (T.tails && T.tails[sx]) || { x: sx * 0.7, y: 0.8, z: -p.L / 2 };
+    const H = cfg.head ? { x: sx * cfg.head.x, y: cfg.head.y, z: cfg.head.z } : (T.heads && T.heads[sx]) || { x: sx * p.W * 0.3, y: p.roofH * 0.5, z: p.L / 2 - 0.12 };
+    const Tl = cfg.tailL ? { x: sx * cfg.tailL.x, y: cfg.tailL.y, z: cfg.tailL.z } : (T.tails && T.tails[sx]) || { x: sx * p.W * 0.3, y: p.roofH * 0.52, z: -p.L / 2 + 0.12 };
     const hs = sprite(sh.glowW, 0.9, 0xfff2dd); hs.material.opacity = 0.55; hs.position.set(H.x, H.y, H.z + 0.1); body.add(hs); heads.push(hs);
     const ts = sprite(sh.glowR, 0.55); ts.material.opacity = 0.7; ts.position.set(Tl.x, Tl.y, Tl.z - 0.1); body.add(ts); heads.push(ts);
   }
@@ -225,12 +239,13 @@ function buildGLBCar(kind, opts) {
   }
   root.traverse((o) => { if (o.isMesh) { o.castShadow = !(o.material && o.material.transparent); o.receiveShadow = false; } });
   root.userData.sharedGeo = true;
-  return { root, body, wheels, paint, tailMat, heads, siren, dims: { L: p.L, W: p.W, wheelR: p.wheelR, wb: p.wb, roofH: p.roofH }, profile: p, parts, glb: T, glbCfg: cfg };
+  return { root, body, wheels, paint, tailMat, dmgMats, heads, siren, dims: { L: p.L, W: p.W, wheelR: p.wheelR, wb: p.wb, roofH: p.roofH }, profile: p, parts, glb: T, glbCfg: cfg };
 }
 
 // kind: super|gt|muscle|sedan|suv|truck ; opts: {color, color2, livery, police, taxi}
 export function buildCar(kind, opts = {}) {
-  if (GLB_MODELS[kind] && hasGLB(GLB_MODELS[kind].model, 'hi')) return buildGLBCar(kind, opts);
+  const gid = opts.model && GLB_MODELS[opts.model] ? opts.model : kind;
+  if (GLB_MODELS[gid] && hasGLB(GLB_MODELS[gid].model, 'hi')) return buildGLBCar(gid, opts);
   const sh = S();
   const root = new THREE.Group();
   const body = new THREE.Group();
