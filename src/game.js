@@ -451,7 +451,7 @@ export class Game {
         if (Math.abs(b.pos.y - a.pos.y) > 2.5) continue;
         const afx = Math.sin(a.yaw), afz = Math.cos(a.yaw), bfx = Math.sin(b.yaw), bfz = Math.cos(b.yaw);
         let hit = false, maxImp = 0, hn = null, hx = 0, hz = 0;
-        for (const sa of [1, -1]) for (const sb of [1, -1]) {
+        for (const sa of [1, 0, -1]) for (const sb of [1, 0, -1]) {
           const ax = a.pos.x + afx * a.circOff * sa, az = a.pos.z + afz * a.circOff * sa;
           const bx = b.pos.x + bfx * b.circOff * sb, bz = b.pos.z + bfz * b.circOff * sb;
           let dx = bx - ax, dz = bz - az; const d = Math.hypot(dx, dz); const min = a.radius + b.radius;
@@ -577,14 +577,14 @@ export class Game {
 
   physics(dt) {
     this.acc += dt;
-    const h = 1 / 120;
+    const h = 1 / 180; // finer step: 100 m/s cars move <0.6 m per step, so thin rails/posts can't be tunnelled
     let steps = 0;
-    while (this.acc >= h && steps < 10) {
+    while (this.acc >= h && steps < 14) {
       for (const c of this.cars) c.step(h);
       this.carCollisions();
       this.acc -= h; steps++;
     }
-    if (steps >= 10) this.acc = 0;
+    if (steps >= 14) this.acc = 0;
   }
 
   resetPlayer() {

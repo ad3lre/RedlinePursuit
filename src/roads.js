@@ -62,6 +62,69 @@ function smoothHeights(pts, closed, radius, passes) {
   for (let i = 0; i < n; i++) pts[i].h = h[i];
 }
 
+
+// ---- geometry hygiene ----
+function minRadius(pts) {
+  let min = 1e9;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const a = pts[i - 1], b = pts[i], c = pts[i + 1];
+    const ab = Math.hypot(b.x - a.x, b.z - a.z), bc = Math.hypot(c.x - b.x, c.z - b.z), ca = Math.hypot(a.x - c.x, a.z - c.z);
+    const area2 = Math.abs((b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x));
+    if (area2 > 1e-6) min = Math.min(min, (ab * bc * ca) / (2 * area2));
+  }
+  return min;
+}
+// Laplacian-relax an open polyline (ends pinned) until no bend is tighter than minR, so the ribbon never folds over itself.
+function relaxCurve(pts, minR, pin = 3) {
+  for (let pass = 0; pass < 6000 && minRadius(pts) < minR; pass++) {
+    const src = pts.map((p) => ({ x: p.x, z: p.z }));
+    for (let i = pin; i < pts.length - pin; i++) {
+      pts[i].x = src[i].x * 0.5 + (src[i - 1].x + src[i + 1].x) * 0.25;
+      pts[i].z = src[i].z * 0.5 + (src[i - 1].z + src[i + 1].z) * 0.25;
+    }
+  }
+}
+function nearestOnPolyline(pts, closed, x, z) {
+  let best = 1e18, bi = 0, bt = 0; const n = pts.length, segN = closed ? n : n - 1;
+  for (let i = 0; i < segN; i++) {
+    const a = pts[i], b = pts[(i + 1) % n]; const dx = b.x - a.x, dz = b.z - a.z; const l2 = dx * dx + dz * dz || 1e-6;
+    let t = ((x - a.x) * dx + (z - a.z) * dz) / l2; t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const d = (x - a.x - dx * t) ** 2 + (z - a.z - dz * t) ** 2;
+    if (d < best) { best = d; bi = i; bt = t; }
+  }
+  const a = pts[bi], b = pts[(bi + 1) % n];
+  return { d: Math.sqrt(best), h: a.h + (b.h - a.h) * bt };
+}
+const sstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+function smoothPinned(pts, radius, passes, pin) {
+  const n = pts.length; let h = pts.map((p) => p.h);
+  for (let ps = 0; ps < passes; ps++) {
+    const nh = h.slice();
+    for (let i = pin; i < n - pin; i++) { let s = 0, c = 0; for (let k = -radius; k <= radius; k++) { const j = clamp(i + k, 0, n - 1); s += h[j]; c++; } nh[i] = s / c; }
+    h = nh;
+  }
+  for (let i = 0; i < n; i++) pts[i].h = h[i];
+}
+
+// Make a height profile drivable: cap grade, then smooth crests/dips so cars stay planted (ends pinned).
+function driveableProfile(pts, maxGrade, pin = 1, closed = false) {
+  const n = pts.length;
+  const ds = []; for (let i = 0; i < n - 1; i++) ds.push(Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].z - pts[i].z));
+  for (let pass = 0; pass < 800; pass++) {
+    let worst = 0;
+    for (let i = 0; i < n - 1; i++) {
+      const dh = pts[i + 1].h - pts[i].h, lim = maxGrade * ds[i];
+      if (Math.abs(dh) > lim) {
+        const ex = (Math.abs(dh) - lim) * 0.5 * Math.sign(dh); worst = Math.max(worst, Math.abs(dh) - lim);
+        if (i >= pin) pts[i].h += ex; if (i + 1 < n - pin) pts[i + 1].h -= ex;
+      }
+    }
+    // curvature relief: pull each point toward the average of its neighbours
+    for (let i = pin; i < n - pin; i++) pts[i].h = pts[i].h * 0.6 + (pts[i - 1].h + pts[i + 1].h) * 0.2;
+    if (worst < 0.01 && pass > 40) break;
+  }
+}
+
 export function buildRoads() {
   const roads = [];
   // ---- Highway loop ----
@@ -122,6 +185,7 @@ export function buildRoads() {
     const pts = resample(dense2, 10);
     pts[0] = { x: s.x, z: s.z };
     pts[pts.length - 1] = { x: F.x, z: F.z };
+    relaxCurve(pts, CONN_HALF_W * 3.2);
     for (const p of pts) p.h = rawHeight(p.x, p.z);
     smoothHeights(pts, false, 8, 4);
     const targetH = e.h;
@@ -129,6 +193,7 @@ export function buildRoads() {
     const t0 = 0 - h0, t1 = targetH - h1;
     pts.forEach((p, i) => { const t = i / (pts.length - 1); p.h += lerp(t0, t1, t); if (i >= 12) p.h = Math.max(p.h, 2.5); });
     for (let i = 0; i < Math.min(8, pts.length); i++) pts[i].h *= i / 8;
+    driveableProfile(pts, 0.085, 1);
     const road = { name: c.name, pts, halfW: CONN_HALF_W, closed: false, kind: 'conn', loopIndex: li };
     roads.push(road);
     connectors.push(road);
@@ -148,8 +213,19 @@ export function buildRoads() {
       }
       const rp = resample(dense, 10);
       rp[0] = { x: F.x, z: F.z }; rp[rp.length - 1] = { x: L.x, z: L.z };
-      const hA = pts[pts.length - 1].h, hB = L.h;
-      rp.forEach((p, i) => { const t = i / (rp.length - 1); const k = t * t * (3 - 2 * t); p.h = lerp(hA, hB, k); });
+      relaxCurve(rp, 9 * 3.2);
+      const hA = pts[pts.length - 1].h, hB = L.h; // (connector end height is the fork height)
+      // sibling ramps share the fork height for the first quarter so they never stack at different heights
+      rp.forEach((p, i) => { const t = i / (rp.length - 1); p.h = lerp(hA, hB, sstep(0.25, 1, t)); });
+      smoothPinned(rp, 2, 3, 1);
+      driveableProfile(rp, 0.09, 1);
+      // wherever the ramp runs over the highway deck, lock it to the deck height exactly; fade out past the edge
+      for (let i = 1; i < rp.length; i++) {
+        const q = nearestOnPolyline(loopPts, true, rp[i].x, rp[i].z);
+        const w = 1 - sstep(LOOP_HALF_W + 2, LOOP_HALF_W + 40, q.d);
+        rp[i].h = lerp(rp[i].h, q.h, w);
+      }
+      rp[rp.length - 1].h = L.h;
       const ramp = { name: c.name + ' RAMP', pts: rp, halfW: 9, closed: false, kind: 'ramp', loopIndex: lp, parent: road };
       roads.push(ramp); ramps.push(ramp); road.ramps.push(ramp);
     }

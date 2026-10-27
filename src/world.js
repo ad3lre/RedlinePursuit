@@ -52,7 +52,7 @@ export class World {
     await nextFrame();
   }
 
-  heightAt(x, z) { return this.hf.get(x, z); }
+  heightAt(x, z) { return this.hf.ground(x, z); }
 
   // ---------------- Sky & lighting ----------------
   buildSky() {

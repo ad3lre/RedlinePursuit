@@ -68,7 +68,9 @@ export class Car {
     this.pos.set(x, this.game.world.heightAt(x, z) + 0.17, z);
     this.yaw = yaw;
     this.vel.set(Math.sin(yaw) * speed, Math.cos(yaw) * speed);
-    this.angVel = 0; this.vy = 0; this.grounded = true;
+    this.angVel = 0; this.vy = 0; this.grounded = true; this.prevG = undefined; this.airTime = 0;
+    this.vPitch = undefined; this.vRoll = undefined; this.vLift = undefined; this.slopeVs = undefined;
+    this.normal.set(0, 1, 0);
     this.syncVisual(0);
   }
 
@@ -153,13 +155,22 @@ export class Car {
 
     // vertical
     const g = world.heightAt(this.pos.x, this.pos.z) + 0.17;
+    const wasGrounded = this.grounded;
+    // slope the car is rolling along (m/s of vertical ground motion)
+    const rawSlopeV = this.prevG !== undefined ? clamp((g - this.prevG) / dt, -30, 30) : 0;
+    // low-pass: a 1-step ground-height jump (mesh seams, segment switches) must not read as a launch ramp
+    this.slopeVs = this.slopeVs === undefined || !wasGrounded ? rawSlopeV : this.slopeVs + (rawSlopeV - this.slopeVs) * Math.min(1, dt * 14);
+    const slopeV = this.slopeVs;
     this.vy -= 22 * dt;
     this.pos.y += this.vy * dt;
-    if (this.pos.y <= g) {
-      if (!this.grounded && this.airTime > 0.35) this.game.onLanding(this, this.airTime);
-      const slopeV = this.prevG !== undefined ? (g - this.prevG) / dt : 0;
+    // ground adhesion: suspension keeps tyres on the road over crests and dips unless the car is genuinely launched
+    // (big vertical speed relative to the surface, or well clear of it). Fixes cars hopping at every grade change.
+    const gap = this.pos.y - g;
+    const stick = wasGrounded && gap < 0.9 && (this.vy - slopeV) < 5.5;
+    if (this.pos.y <= g || stick) {
+      if (!wasGrounded && this.airTime > 0.35) this.game.onLanding(this, this.airTime);
       this.pos.y = g; this.vy = clamp(slopeV, -30, 14); this.grounded = true; this.airTime = 0;
-    } else if (this.pos.y > g + 0.25) { this.grounded = false; this.airTime += dt; }
+    } else if (gap > 0.25) { this.grounded = false; this.airTime += dt; }
     this.prevG = g;
 
     // world bounds
@@ -189,7 +200,7 @@ export class Car {
   collideStatic() {
     const st = this.game.world.statics;
     const fx = Math.sin(this.yaw), fz = Math.cos(this.yaw);
-    for (const s of [1, -1]) {
+    for (const s of [1, 0, -1]) { // front / middle / rear circles: no gaps along the body
       const cx = this.pos.x + fx * this.circOff * s, cz = this.pos.z + fz * this.circOff * s;
       const r = st.collide(cx, cz, this.radius, colRes);
       if (!r) continue;
@@ -228,11 +239,27 @@ export class Car {
     const targetRoll = Math.asin(clamp(n.x * -fz + n.z * fx, -1, 1));
     this.pitch = dt ? damp(this.pitch, targetPitch, 10, dt) : targetPitch;
     this.roll = dt ? damp(this.roll, targetRoll, 10, dt) : targetRoll;
+    // sample the real surface under all four wheels -> pitch/roll/ride-height that follow the road, no wheel clipping
+    let lift = 0;
+    if (this.grounded) {
+      const wbh = this.dims.wb, hwt = this.dims.W / 2 - 0.2, cy = Math.cos(this.yaw), sy = Math.sin(this.yaw);
+      const hs = (lz, lx) => world.heightAt(this.pos.x + sy * lz + cy * lx, this.pos.z + cy * lz - sy * lx);
+      const hFL = hs(wbh, -hwt), hFR = hs(wbh, hwt), hRL = hs(-wbh, -hwt), hRR = hs(-wbh, hwt);
+      const tp = Math.atan2((hFL + hFR) - (hRL + hRR), 4 * wbh);
+      const tr = Math.atan2((hFR + hRR) - (hFL + hRL), 4 * hwt);
+      this.vPitch = dt ? damp(this.vPitch ?? tp, tp, 18, dt) : tp;
+      this.vRoll = dt ? damp(this.vRoll ?? tr, tr, 18, dt) : tr;
+      const avg = (hFL + hFR + hRL + hRR) / 4;
+      const tl = avg - (this.pos.y - 0.17);
+      this.vLift = dt ? damp(this.vLift ?? tl, tl, 18, dt) : tl;
+      lift = this.vLift;
+    } else { this.vPitch = this.pitch; this.vRoll = this.roll; this.vLift = 0; }
+    m.root.position.y = this.pos.y + lift;
     m.root.rotation.set(0, 0, 0);
     m.root.rotation.order = 'YXZ';
     m.root.rotation.y = this.yaw;
-    m.root.rotation.x = this.pitch;
-    m.root.rotation.z = this.roll;
+    m.root.rotation.x = this.grounded ? -this.vPitch : this.pitch;
+    m.root.rotation.z = this.grounded ? this.vRoll : this.roll;
     // body lean (suspension)
     const bp = clamp(-this.accelLong * 0.004, -0.05, 0.05);
     const br = clamp(this.accelLat * 0.006, -0.08, 0.08);

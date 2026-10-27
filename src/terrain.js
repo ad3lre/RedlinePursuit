@@ -70,6 +70,7 @@ export class HeightField {
         }
       }
     }
+    this.rgrid = grid; this.rkey = key; this.rcs = CS;
     for (let j = 0; j < n; j++) {
       const z = -WORLD_HALF + j * HF_CELL;
       for (let i = 0; i < n; i++) {
@@ -88,8 +89,8 @@ export class HeightField {
           }
           this.rd[j * n + i] = Math.min(best, 999);
           if (best < 42) {
-            const w = smoothstep(2, 42, best);
-            h = lerp(bh - 0.05, h, w);
+            const w = smoothstep(3, 42, best);
+            h = lerp(bh - 0.3, h, w);
           }
         }
         this.data[j * n + i] = h;
@@ -108,10 +109,28 @@ export class HeightField {
     if (tx + tz <= 1) return h00 + (h10 - h00) * tx + (h01 - h00) * tz;
     return h11 + (h01 - h11) * (1 - tx) + (h10 - h11) * (1 - tz);
   }
+  // Height of what the player actually drives on: the road ribbon when over one, otherwise terrain.
+  // Terrain cells are 10 m wide so they can't follow a 20 m road exactly; this removes wheels sinking into / floating over the asphalt.
+  ground(x, z) {
+    const t = this.get(x, z);
+    const arr = this.rgrid && this.rgrid.get(this.rkey(Math.floor(x / this.rcs), Math.floor(z / this.rcs)));
+    if (!arr) return t;
+    let best = 1e9, bh = 0;
+    for (const sg of arr) {
+      const dx = sg.b.x - sg.a.x, dz = sg.b.z - sg.a.z; const l2 = dx * dx + dz * dz || 1e-6;
+      let u = ((x - sg.a.x) * dx + (z - sg.a.z) * dz) / l2; u = u < 0 ? 0 : u > 1 ? 1 : u;
+      const d = Math.hypot(x - sg.a.x - dx * u, z - sg.a.z - dz * u) - sg.hw;
+      if (d < best) { best = d; bh = sg.a.h + (sg.b.h - sg.a.h) * u; }
+    }
+    if (best > 3) return t;
+    const roadY = bh + 0.12;
+    if (best <= 0) return roadY;
+    const k = best / 3; return roadY + (t - roadY) * (k * k * (3 - 2 * k));
+  }
   normal(x, z, out) {
     const e = 2;
-    const hx = this.get(x + e, z) - this.get(x - e, z);
-    const hz = this.get(x, z + e) - this.get(x, z - e);
+    const hx = this.ground(x + e, z) - this.ground(x - e, z);
+    const hz = this.ground(x, z + e) - this.ground(x, z - e);
     out.set(-hx, 2 * e, -hz).normalize();
     return out;
   }
