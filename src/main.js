@@ -155,7 +155,14 @@ function loop(now) {
   if ((app === 'title' || app === 'menu') && game.demo) demoCamera(dt);
   if (app === 'garage') garageSpin(dt);
   const pl = game.player;
-  rig.update(dt, app === 'garage' ? null : pl, time);
+  const spec = app === 'game' && game.spectating ? game.specTarget() : null;
+  if (spec && (rig.mode === 'cockpit' || rig.mode === 'hood')) rig.setMode(0); // first-person views belong to your own car
+  if (app === 'game' && game.spectating && game.state === 'playing') {
+    if (input.hit('KeyE', 'ArrowRight', 'KeyD', 'PadRB')) game.specCycle(1);
+    if (input.hit('KeyQ', 'ArrowLeft', 'KeyA', 'PadLB')) game.specCycle(-1);
+  }
+  rig.update(dt, app === 'garage' ? null : (spec || pl), time);
+  updateSpecBanner(spec);
   { const nn = (rig.mode === 'cockpit' || rig.mode === 'hood') && app === 'game' ? 0.12 : 0.45; if (Math.abs(camera.near - nn) > 1e-3) { camera.near = nn; camera.updateProjectionMatrix(); } } // 0.1 m near over a 14 km range gave ~cm-level depth jitter on far road/ground
   if (app === 'game' || app === 'paused' || app === 'result') hud.update(dt, game, camera, world, settings);
   // sun follows camera focus
@@ -190,6 +197,11 @@ function loop(now) {
 }
 
 function handleGlobalKeys() {
+  // Shift+A: take over as room host (password is checked by the relay, never stored in the client). Not while actively driving: Shift = nitro, A = steer.
+  if (input.hit('KeyA') && input.k('ShiftLeft', 'ShiftRight') && net.connected && !(app === 'game' && game.state === 'playing')) {
+    const pw = window.prompt('Host password:'); input.keys.clear();
+    if (pw) net.send({ t: 'claim', pw });
+  }
   if (input.hit('KeyG', 'PadStart', 'PadY') && waiting && isOwner()) goNow();
   const scr = visibleScreen();
   if (app === 'title') {
@@ -311,6 +323,16 @@ window.addEventListener('gamepaddisconnected', () => { if (app === 'game') pause
 window.addEventListener('gamepadconnected', (e) => { input.pollPad(); const g = $('pad-badge'); g.textContent = '🎮 ' + (input.kind === 'ps' ? 'PlayStation' : input.kind === 'switch' ? 'Switch' : 'Xbox') + ' controller connected: D-pad/stick to select, ' + (input.kind === 'ps' ? '✕' : 'A') + ' to confirm'; g.classList.remove('hidden'); g.classList.remove('rfade'); void g.offsetWidth; g.classList.add('rfade'); });
 
 // ---------- UI flow ----------
+function updateSpecBanner(spec) {
+  const el = $('spec-banner'); const on = app === 'game' && !!game.spectating && game.state === 'playing';
+  el.classList.toggle('hidden', !on);
+  if (!on) return;
+  $('spec-name').textContent = spec ? spec.name : '-';
+  const n = game.aliveHumans().length;
+  $('spec-sub').textContent = `${n} player${n === 1 ? '' : 's'} still in  -  event ends when everyone is out  -  Q / E to switch`;
+}
+$('spec-prev').onclick = () => game.specCycle(-1);
+$('spec-next').onclick = () => game.specCycle(1);
 function show(id) { for (const p of ['title', 'menu', 'garage', 'pause', 'result', 'settings', 'controls']) $(p).classList.toggle('hidden', p !== id); if (id) delete navIdx[id]; document.querySelectorAll('.pad-focus').forEach((e) => e.classList.remove('pad-focus')); }
 function enterMenu() {
   audio.init();
@@ -431,7 +453,7 @@ window.addEventListener('contextmenu', (e) => { if (app === 'game') e.preventDef
 function showResult(r) {
   if (app !== 'game') return;
   app = 'result'; show('result');
-  const title = { finish: r.place === 1 ? 'VICTORY' : `P${r.place} FINISH`, busted: 'BUSTED', wrecked: 'WRECKED', wrecked_cop: 'WRECKED', cop_done: 'EVENT COMPLETE' }[r.reason] || 'RESULT';
+  const title = r.allOut ? 'GAME OVER' : { finish: r.place === 1 ? 'VICTORY' : `P${r.place} FINISH`, busted: 'BUSTED', wrecked: 'WRECKED', wrecked_cop: 'WRECKED', cop_done: 'EVENT COMPLETE' }[r.reason] || 'RESULT';
   const good = r.reason === 'finish' || r.reason === 'cop_done';
   $('res-title').textContent = title;
   $('res-title').className = good ? 'good' : 'bad';
@@ -554,6 +576,7 @@ function goNow() { if (waiting && isOwner()) net.send({ t: 'go' }); }
 net.on((m) => {
   if (m.t === 'room') { room = m; if (app === 'garage' || waiting) refreshWait(); }
   else if (m.t === 'closed') { room = null; if (waiting) { waiting = false; setWait('Disconnected — starting a local game'); startLocal(); } }
+  else if (m.t === 'claim') { if (m.ok) { game && game.notify('HOST', 'You are now the room host', '#3aff90', true); refreshWait(); } else alert(m.msg || 'Wrong password'); }
   else if (m.t === 'start') beginSession(m);
   else if (m.t === 'assign') beginSession(m, true);
   else if (game && game.multi) game.onNet(m);

@@ -108,7 +108,7 @@ export class Game {
   // ---------------- lifecycle ----------------
   clear() {
     for (const c of [...this.cars]) c.dispose();
-    this.cars = []; this.traffic = []; this.cops = []; this.racers = []; this.netCars = new Map(); this.respawnT = 0;
+    this.cars = []; this.traffic = []; this.cops = []; this.racers = []; this.netCars = new Map(); this.respawnT = 0; this.spectating = null;
     for (const s of this.spikes) this.scene.remove(s.mesh);
     this.spikes = []; this.roadblocks = [];
     this.player = null; this.gates.visible = false;
@@ -308,7 +308,7 @@ export class Game {
     const cars = this.ownedNetCars().map((c) => {
       const pl = c === this.player;
       const prog = pl ? this.playerProgress || 0 : c.ai?.progress || 0;
-      const f = (c.wrecked ? 1 : 0) | (c.nitroActive ? 2 : 0) | ((pl ? this.playerFinished : c.ai?.finished) ? 4 : 0) | (c.input.handbrake ? 8 : 0) | (c.input.nitro ? 16 : 0);
+      const f = (c.wrecked ? 1 : 0) | (c.nitroActive ? 2 : 0) | ((pl ? this.playerFinished : c.ai?.finished) ? 4 : 0) | (c.input.handbrake ? 8 : 0) | (c.input.nitro ? 16 : 0) | (pl && this.spectating ? 32 : 0);
       return [c.net.id, r(c.pos.x), r(c.pos.y), r(c.pos.z), r(c.yaw, 1000), r(c.vel.x), r(c.vel.y), r(c.angVel, 1000), r(c.health, 1000), f, Math.round(prog), r(c.input.steer), r(c.input.throttle), r(c.input.brake), r(c.nitro)];
     });
     M.net.send({ t: 's', cars });
@@ -322,7 +322,7 @@ export class Game {
         if (!c || !(c.ai instanceof RemoteAI)) continue;
         c.ai.snap = { x: a[1], y: a[2], z: a[3], yaw: a[4], vx: a[5], vz: a[6], av: a[7], h: a[8], f: a[9], st: a[11], th: a[12], br: a[13] };
         c.ai.age = 0; c.ai.progress = a[10];
-        c.health = a[8]; c.nitro = a[14] ?? c.nitro;
+        c.health = a[8]; c.nitro = a[14] ?? c.nitro; c.out = !!(a[9] & 32);
         if (a[9] & 4 && !c.ai.finished && this.route) { c.ai.finished = true; this.finished.push(c); }
         if (!(a[9] & 1) && c.wrecked) { c.wrecked = false; c.sirenOn = undefined; }
       }
@@ -355,6 +355,7 @@ export class Game {
       if (m.amt) this.damage(c, m.amt, this.netCars.get(m.by) || null);
     } else if (m.t === 'bust') {
       // a human racer was busted by a human cop: every client counts it
+      { const bc = this.netCars.get(m.id); if (bc) bc.out = true; }
       if (m.id !== this.multi.myId && !this.bustSeen?.has(m.id)) { (this.bustSeen ||= new Set()).add(m.id); this.bustedRacers++; this.notify('BUSTED!', `${m.name || 'Racer'} busted (${this.bustedRacers}/${this.racerTotal()})`, '#3aa0ff', true); }
     } else if (m.t === 'escape') {
       if (!this.escSeen?.has(m.id)) { (this.escSeen ||= new Set()).add(m.id); this.escapedRacers++; this.notify('RACER ESCAPED', `${m.name || 'Racer'} got away`, '#ff6040'); }
@@ -395,6 +396,7 @@ export class Game {
     }
   }
   multiRules(dt) {
+    if (this.spectating && this.state === 'playing' && !this.aliveHumans().length) { this.endGame(this.spectating.reason, true); return; }
     // host keeps free-roam bots circulating along the race loop
     if (this.multi.host === this.multi.myId && this.mode === 'free') {
       for (const c of this.netCars.values()) {
@@ -417,6 +419,35 @@ export class Game {
         this.state = 'playing';
       }
     }
+  }
+  // ---- spectator mode (multiplayer, Race / Interceptor): when you die and other REAL players are still racing you watch them;
+  // the event ends for everybody once every real player is out (wrecked / busted / finished / left). Bots never keep it alive.
+  aliveHumans() {
+    const out = [];
+    for (const c of this.netCars.values()) if (c.net.human && !c.out && !c.wrecked && !c.ai?.finished) out.push(c);
+    return out;
+  }
+  specTarget() {
+    if (!this.spectating) return null;
+    const alive = this.aliveHumans(); if (!alive.length) return null;
+    const cur = alive.find((c) => c.net.id === this.spectating.id) || alive[0];
+    this.spectating.id = cur.net.id; return cur;
+  }
+  specCycle(dir) {
+    if (!this.spectating) return;
+    const alive = this.aliveHumans(); if (!alive.length) return;
+    const i = Math.max(0, alive.findIndex((c) => c.net.id === this.spectating.id));
+    this.spectating.id = alive[(i + dir + alive.length) % alive.length].net.id;
+    this.audio.click && this.audio.click();
+  }
+  goSpectator(reason) {
+    const alive = this.aliveHumans();
+    this.spectating = { reason, id: alive[0]?.net.id || null };
+    this.pursuit = false; this.bust = 0; this.cooldown = 20; this.heat = 1; this.pursuitTime = 0;
+    for (const c of [...this.cops]) { if (c.ai) { c.sirenOn = false; c.ai.target = null; c.ai.retire = true; } }
+    const pl = this.player; pl.input.throttle = 0; pl.input.nitro = 0;
+    if (reason === 'busted') { this.audio.busted(); this.notify('BUSTED', 'You are out - spectating', '#ff3050', true); }
+    else { this.notify('WRECKED', 'You are out - spectating', '#ff3050', true); }
   }
   softFail(reason) {
     // multiplayer free roam: losing doesn't end the session
@@ -803,7 +834,7 @@ export class Game {
       if (this.state === 'playing') this.raceTime += dt;
       // player input
       if (this.demo) { /* AI drives */ }
-      else if (this.state === 'playing' && !pl.wrecked && this.respawnT <= 0) {
+      else if (this.state === 'playing' && !pl.wrecked && this.respawnT <= 0 && !this.spectating) {
         const d = this.inputLocked ? { steer: 0, throttle: 0, brake: 0, handbrake: 0, nitro: 0 } : input.drive(dtReal);
         Object.assign(pl.input, d);
         if (pl.nitroActive === false && d.nitro && pl.nitro > 0.05 && !this._nitroWas) { this.audio.nitroStart(); this.rig.addShake(0.3); this.input.vibrate(260, 0.45, 0.7); }
@@ -1186,14 +1217,21 @@ export class Game {
     this.endGame('finish');
   }
 
-  endGame(reason) {
+  endGame(reason, force = false) {
     if (this.state === 'ending' || this.state === 'result') return;
-    if (this.multi && this.multi.net && reason === 'busted') this.multi.net.send({ t: 'bust', id: this.multi.myId, name: this.player.name });
+    if (this.spectating && !force && (reason === 'busted' || reason === 'wrecked' || reason === 'wrecked_cop')) return; // already out and watching
+    if (!force && this.multi && this.multi.net && reason === 'busted') this.multi.net.send({ t: 'bust', id: this.multi.myId, name: this.player.name });
     if (this.multi && this.mode === 'free' && (reason === 'busted' || reason === 'wrecked')) { if (this.respawnT <= 0) this.softFail(reason); return; }
+    // multiplayer race / interceptor: dying while other real players are still going puts you in spectator mode
+    if (!force && this.multi && this.state === 'playing' && (reason === 'busted' || reason === 'wrecked' || reason === 'wrecked_cop') && this.aliveHumans().length > 0) { this.goSpectator(reason); return; }
+    // GAME OVER = every real player is out: forced by the last spectator, or the last real player to die (others already out)
+    const allOut = force || (!!this.multi && (reason === 'busted' || reason === 'wrecked' || reason === 'wrecked_cop') && [...this.netCars.values()].some((c) => c.net.human));
+    this.spectating = null;
     this.state = 'ending';
     const pl = this.player;
-    this.result = { reason, time: this.raceTime, place: this.playerPlace || this.position, takedowns: this.takedowns, bounty: Math.round(this.bounty), maxSpeed: this.maxSpeed * 3.6, busted: this.bustedRacers, escaped: this.escapedRacers, escapes: this.escapes, heat: this.heat, total: this.racers.length, multi: !!this.multi };
-    if (reason === 'busted') { this.audio.busted(); this.notify('BUSTED', 'You were arrested…', '#ff3050', true); this.radio('Suspect is in custody. Good work everyone.'); }
+    this.result = { reason, time: this.raceTime, place: this.playerPlace || this.position, takedowns: this.takedowns, bounty: Math.round(this.bounty), maxSpeed: this.maxSpeed * 3.6, busted: this.bustedRacers, escaped: this.escapedRacers, escapes: this.escapes, heat: this.heat, total: this.racers.length, multi: !!this.multi, allOut };
+    if (allOut) { this.audio.busted(); this.notify('GAME OVER', 'All players are out', '#ff3050', true); }
+    else if (reason === 'busted') { this.audio.busted(); this.notify('BUSTED', 'You were arrested…', '#ff3050', true); this.radio('Suspect is in custody. Good work everyone.'); }
     else if (reason === 'wrecked' || reason === 'wrecked_cop') { this.audio.busted(); this.notify('WRECKED', 'Vehicle wrecked', '#ff3050', true); }
     else if (reason === 'finish') { this.audio.victory(); this.notify(this.playerPlace === 1 ? 'VICTORY!' : `FINISH  P${this.playerPlace}`, fmtTime(this.raceTime), '#30ff90', true); }
     else if (reason === 'cop_done') { this.audio.victory(); this.notify('EVENT COMPLETE', `Busted ${this.bustedRacers}/${this.racerTotal()}`, '#3aa0ff', true); }

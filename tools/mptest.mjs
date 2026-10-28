@@ -68,8 +68,23 @@ try {
   const bustedBefore = await A.evaluate(() => window.__rp.game.bustedRacers);
   B.send(JSON.stringify({ t: 'bust', id: 'pX', name: 'GHOSTRACER' })); await sleep(600);
   check('bust broadcast counted on A with real racer total', (await A.evaluate(() => window.__rp.game.bustedRacers)) === bustedBefore + 1 && await A.evaluate(() => /\/\d+/.test(document.getElementById('busted-num').textContent)));
+  // ---- spectator mode: A dies while real player B is still racing -> A spectates B; event ends when B is out too ----
+  const specSnap = () => A.evaluate(() => { const g = window.__rp.game; const t = g.specTarget && g.specTarget(); return { state: g.state, spec: !!g.spectating, target: t ? t.name : null, banner: !document.getElementById('spec-banner').classList.contains('hidden'), bannerName: document.getElementById('spec-name').textContent, alive: g.aliveHumans().length, res: g.result ? { allOut: g.result.allOut, reason: g.result.reason } : null }; });
+  await A.evaluate(() => { const g = window.__rp.game; g.player.health = 0.01; g.damage(g.player, 0.5, null); }); await sleep(1200);
+  let sp = await specSnap();
+  check('A dies while B alive -> spectator mode (not game over)', sp.spec && sp.state === 'playing' && !sp.res, JSON.stringify(sp));
+  await A.screenshot({ path: process.platform === 'win32' ? 'shots/spec.png' : '/tmp/spec.png' }).catch(() => {});
+  check('spectator banner shows B and the camera targets B', sp.banner && sp.bannerName === 'NODECOP' && sp.target === 'NODECOP', sp.bannerName);
+  await A.keyboard.press('KeyE'); await sleep(300);
+  check('A stays spectating after switching targets (only one other player)', (await specSnap()).spec);
+  // B (the last real player) is wrecked -> everyone is out -> GAME OVER for A
+  B.send(JSON.stringify({ t: 'wreck', id: bid, by: null })); await sleep(1800);
+  sp = await specSnap();
+  check('last real player out -> game over for the spectator', (sp.state === 'ending' || sp.state === 'result') && sp.res && sp.res.allOut === true, JSON.stringify(sp.res));
+  check('spectator banner hidden at game over', !sp.banner);
   clearInterval(iv); B.close(); await sleep(1500);
   check('B leaving removes its car', await A.evaluate(() => !window.__rp.game.cars.some((c) => c.name === 'NODECOP')));
+  await A.evaluate(() => { window.__rp.game.start && 0; });
   await A.screenshot({ path: process.platform === 'win32' ? 'shots/mpA.png' : '/tmp/mpA.png' }).catch(() => {});
 } finally { await br.close(); }
 const bad = results.filter((r) => !r[1]); log(`${results.length - bad.length}/${results.length} passed`); process.exit(bad.length ? 1 : 0);

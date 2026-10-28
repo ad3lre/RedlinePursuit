@@ -188,6 +188,13 @@ button:focus { outline: none; }
 #wait-banner { position: fixed; left: 50%; bottom: 120px; transform: translateX(-50%); z-index: 60; padding: 10px 22px; background: rgba(8,10,14,0.82); border: 1px solid var(--line); color: #fff; font: 700 18px Rajdhani, sans-serif; letter-spacing: 0.12em; pointer-events: none; }
 #btn-go { position: fixed; left: 50%; bottom: 60px; transform: translateX(-50%); z-index: 61; min-width: 160px; font-size: 22px; }
 #wait-banner.hidden, #btn-go.hidden { display: none; }
+#spec-banner { position: fixed; left: 50%; top: 74px; transform: translateX(-50%); z-index: 60; display: flex; align-items: center; gap: 14px; padding: 8px 14px; background: rgba(8,10,14,0.82); border: 1px solid var(--line); color: #fff; font: 700 16px Rajdhani, sans-serif; letter-spacing: 0.1em; }
+#spec-banner.hidden { display: none; }
+#spec-banner > div { display: flex; flex-direction: column; align-items: center; min-width: 260px; }
+#spec-banner small { color: #ff6a6a; letter-spacing: 0.3em; font-size: 12px; }
+#spec-banner b { font-size: 24px; letter-spacing: 0.14em; }
+#spec-banner em { font-style: normal; font-size: 12px; color: #aab; letter-spacing: 0.06em; }
+#spec-banner button { background: transparent; color: #fff; border: 1px solid var(--line); width: 38px; height: 38px; font-size: 16px; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -292,6 +299,7 @@ button:focus { outline: none; }
     <div class="btnrow"><button class="btn" id="btn-res-menu">MENU</button><button class="btn primary" id="btn-retry">RETRY</button></div></div></div>
 </div>
 <div id="wait-banner" class="hidden"></div>
+<div id="spec-banner" class="hidden"><button id="spec-prev">&#9664;</button><div><small>SPECTATING</small><b id="spec-name"></b><em id="spec-sub"></em></div><button id="spec-next">&#9654;</button></div>
 <button id="btn-go" class="btn primary hidden">GO</button>
 <div id="sound-hint" class="hidden">🔇 Click the screen or press a key to enable sound (browsers may not start audio from a gamepad alone)</div>
 <div id="pad-badge" class="hidden"></div>
