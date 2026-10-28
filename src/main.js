@@ -16,7 +16,7 @@ import { loadCarAssets } from './carAssets.js';
 import { loadEnvAssets } from './envAssets.js';
 
 const $ = (id) => document.getElementById(id);
-const DEFAULTS = { camMode: 0, fov: 65, shake: 0, speedFx: true, centerDot: false, mouseLook: 1, mouseSens: 1, mouseInvY: false, mouseReturn: true, cinematic: true, voice: true, quality: 1, master: 0.8, music: 0.6, sfx: 0.9 };
+const DEFAULTS = { camMode: 0, fov: 65, shake: 0, speedFx: true, centerDot: false, mouseLook: 1, mouseSens: 1, mouseInvY: false, mouseReturn: true, cinematic: true, voice: true, quality: 1, master: 0.8, music: 0.6, sfx: 0.9, padRumble: true, padDeadzone: 0.12, padLookSens: 1 };
 let settings = { ...DEFAULTS };
 try { const s = JSON.parse(localStorage.getItem('redline-settings') || '{}'); settings = { ...DEFAULTS, ...s }; } catch (e) { /* ignore */ }
 const saveSettings = () => { try { localStorage.setItem('redline-settings', JSON.stringify(settings)); } catch (e) { /* ignore */ } };
@@ -134,6 +134,9 @@ function loop(now) {
   }
   time += dt;
   input.pollPad();
+  input.rumble = settings.padRumble !== false; input.deadzone = settings.padDeadzone ?? 0.12;
+  if (app === 'game' && lookAllowed()) { const [rx, ry] = input.padRight; if (rx || ry) rig.addLook(rx * 14 * (settings.padLookSens ?? 1) * (dt * 60), ry * 10 * (settings.padLookSens ?? 1) * (dt * 60)); }
+  if (app !== 'game' && input.padCount) input.stopRumble();
   if (document.pointerLockElement === canvas && !(lookAllowed() && settings.mouseLook === 2)) document.exitPointerLock();
   handleGlobalKeys();
   touch.update(app === 'game' && game.state !== 'ending' && game.state !== 'result', !$('abilities').classList.contains('hidden'));
@@ -180,7 +183,7 @@ function loop(now) {
 }
 
 function handleGlobalKeys() {
-  if (input.hit('KeyG') && waiting) goNow();
+  if (input.hit('KeyG', 'PadStart', 'PadY') && waiting && isOwner()) goNow();
   const scr = visibleScreen();
   if (app === 'title') {
     if (input.hit('Enter', 'Space', 'PadA', 'PadB', 'PadX', 'PadY', 'PadStart')) enterMenu();
@@ -297,7 +300,8 @@ document.addEventListener('pointerup', (e) => { const r = e.target.closest && e.
 const unlockAudio = () => { if (audio.ready && audio.ctx.state === 'suspended') audio.ctx.resume(); };
 window.addEventListener('pointerdown', unlockAudio);
 window.addEventListener('keydown', unlockAudio);
-window.addEventListener('gamepadconnected', (e) => { const g = $('pad-badge'); g.textContent = '🎮 Gamepad connected: D-pad/stick to select, A to confirm, B to go back'; g.classList.remove('hidden'); g.classList.remove('rfade'); void g.offsetWidth; g.classList.add('rfade'); });
+window.addEventListener('gamepaddisconnected', () => { if (app === 'game') pause(true); });
+window.addEventListener('gamepadconnected', (e) => { input.pollPad(); const g = $('pad-badge'); g.textContent = '🎮 ' + (input.kind === 'ps' ? 'PlayStation' : input.kind === 'switch' ? 'Switch' : 'Xbox') + ' controller connected: D-pad/stick to select, ' + (input.kind === 'ps' ? '✕' : 'A') + ' to confirm'; g.classList.remove('hidden'); g.classList.remove('rfade'); void g.offsetWidth; g.classList.add('rfade'); });
 
 // ---------- UI flow ----------
 function show(id) { for (const p of ['title', 'menu', 'garage', 'pause', 'result', 'settings', 'controls']) $(p).classList.toggle('hidden', p !== id); if (id) delete navIdx[id]; document.querySelectorAll('.pad-focus').forEach((e) => e.classList.remove('pad-focus')); }
@@ -443,6 +447,9 @@ function buildSettings() {
     { k: 'speedFx', label: 'Speed effects (blur / FOV change)', type: 'bool' },
     { k: 'centerDot', label: 'Anti-nausea center dot', type: 'bool' },
     { k: 'mouseLook', label: 'Mouse look', type: 'sel', vals: [[0, 'OFF'], [1, 'Drag'], [2, 'Mouse lock']] },
+    { k: 'padRumble', label: 'Controller vibration', type: 'bool' },
+    { k: 'padDeadzone', label: 'Controller stick deadzone', type: 'range', min: 0.02, max: 0.3, step: 0.01 },
+    { k: 'padLookSens', label: 'Controller look sensitivity (right stick)', type: 'range', min: 0.3, max: 2.5, step: 0.1 },
     { k: 'mouseSens', label: 'Mouse sensitivity', type: 'range', min: 0.2, max: 3, step: 0.1 },
     { k: 'mouseInvY', label: 'Invert mouse Y', type: 'bool' },
     { k: 'mouseReturn', label: 'Auto-recenter mouse view', type: 'bool' },

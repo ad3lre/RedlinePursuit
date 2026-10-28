@@ -55,6 +55,7 @@ const GLB_MODELS = {
 };
 GLB_MODELS.gt = { model: 'concept', L: 4.4, W: 2.05, roofH: 1.2, belt: 0.85, hoodFront: 0.9, wsBase: 0.7, roofF: 0.0, roofR: -1.0, rearWin: -1.7, deck: 0.98, tail: 0.95, spoiler: false, cabinW: 1.5 };
 GLB_MODELS.muscle = { ...GLB_MODELS.super };
+GLB_MODELS.cybertruck = { model: 'cybertruck', auto: true, hud: 0xb8bcc2 };
 for (const id of ['compact', 'coupe', 'hatchback', 'minivan', 'offroad', 'pickup', 'sedan', 'sport', 'suv', 'wagon']) GLB_MODELS[id] = { model: id, auto: true, hud: { compact: 0x4cc0e0, coupe: 0x2030c0, hatchback: 0xe8d040, minivan: 0x801818, offroad: 0x2a4a20, pickup: 0x1a6a2a, sedan: 0xb0a040, sport: 0xc81818, suv: 0x202020, wagon: 0x4a90a0 }[id] };
 
 function bodyShape(p) {

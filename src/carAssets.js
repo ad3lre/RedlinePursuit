@@ -10,6 +10,8 @@ import ferrariLo from '../assets/models/ferrari_lo.glb';
 import conceptHi from '../assets/models/concept_hi.glb';
 import conceptLo from '../assets/models/concept_lo.glb';
 
+import cyberHi from '../assets/models/cybertruck_hi.glb';
+import cyberLo from '../assets/models/cybertruck_lo.glb';
 import pack_compact from '../assets/models/pack_compact.glb';
 import pack_coupe from '../assets/models/pack_coupe.glb';
 import pack_hatchback from '../assets/models/pack_hatchback.glb';
@@ -21,12 +23,14 @@ import pack_sport from '../assets/models/pack_sport.glb';
 import pack_suv from '../assets/models/pack_suv.glb';
 import pack_wagon from '../assets/models/pack_wagon.glb';
 
-const SOURCES = { 'ferrari:hi': ferrariHi, 'ferrari:lo': ferrariLo, 'concept:hi': conceptHi, 'concept:lo': conceptLo, 'compact:hi': pack_compact, 'coupe:hi': pack_coupe, 'hatchback:hi': pack_hatchback, 'minivan:hi': pack_minivan, 'offroad:hi': pack_offroad, 'pickup:hi': pack_pickup, 'sedan:hi': pack_sedan, 'sport:hi': pack_sport, 'suv:hi': pack_suv, 'wagon:hi': pack_wagon };
+const SOURCES = { 'cybertruck:hi': cyberHi, 'cybertruck:lo': cyberLo, 'ferrari:hi': ferrariHi, 'ferrari:lo': ferrariLo, 'concept:hi': conceptHi, 'concept:lo': conceptLo, 'compact:hi': pack_compact, 'coupe:hi': pack_coupe, 'hatchback:hi': pack_hatchback, 'minivan:hi': pack_minivan, 'offroad:hi': pack_offroad, 'pickup:hi': pack_pickup, 'sedan:hi': pack_sedan, 'sport:hi': pack_sport, 'suv:hi': pack_suv, 'wagon:hi': pack_wagon };
 // Per-model node/material mapping. rotY: radians to turn the model so its nose points +Z (game forward).
 // "Generic passenger car pack" (CC BY, Comrade1280): pre-split + oriented by tools/splitpack.mjs; keeps its own baked textures (no repaint).
 const PACK_DEF = { rotY: 0, wheelNode: /^wheel_(fl|fr|rl|rr)$/, frontWheel: /^wheel_f/, steer: null, paintMat: null, glassMat: /^Glass/, tailMat: null, headMat: null, keepTextures: true };
 export const MODEL_DEFS = {
   ferrari: { rotY: Math.PI, wheelNode: /^wheel_(fl|fr|rl|rr)$/, frontWheel: /^wheel_f/, tireMesh: /tire/i, steer: /^steering_wheel$/, paintMat: /^Body_Color$/, glassMat: /^Glass_Gray$/, tailMat: /^Taillight_Glass$/, tailPaintCombine: false },
+  // Tesla Cybertruck (TAIGA-ZOE, CC BY 4.0), prepared by tools/prepcybertruck.mjs: metres, nose +Z, wheels split. Keeps its own steel textures.
+  cybertruck: { rotY: 0, wheelNode: /^wheel_(fl|fr|rl|rr)$/, frontWheel: /^wheel_f/, steer: null, paintMat: null, glassMat: /^Glass/, tailMat: /^Light_R$/, headMat: null, keepTextures: true },
   compact: PACK_DEF,
   coupe: PACK_DEF,
   hatchback: PACK_DEF,

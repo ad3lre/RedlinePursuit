@@ -457,7 +457,8 @@ export class Game {
   // ---------------- spawning ----------------
   // pick a rival model that differs from the player's car (and from other rivals where possible)
   rivalModel(carIdx, i) {
-    const mine = PLAYER_CARS[carIdx % PLAYER_CARS.length].kind === 'super' ? 'ferrari' : PLAYER_CARS[carIdx % PLAYER_CARS.length].kind === 'gt' ? 'concept' : 'ferrari';
+    const pc = PLAYER_CARS[carIdx % PLAYER_CARS.length];
+    const mine = pc.model || (pc.kind === 'gt' ? 'concept' : 'ferrari');
     const pool = RIVAL_MODELS.filter((r) => r.model !== mine);
     return pool[i % pool.length];
   }
@@ -603,6 +604,7 @@ export class Game {
 
   // ---------------- events ----------------
   onLanding(car, air) {
+    if (car === this.player) this.input.vibrate(180 + air * 120, clamp(air / 1.2, 0.3, 1), 0.5);
     if (car === this.player) {
       this.audio.landing(clamp(air, 0.3, 1));
       this.rig.addShake(0.5);
@@ -619,7 +621,7 @@ export class Game {
       const vol = clamp(1 - dist / 120, 0, 1);
       if (vol > 0) this.audio.crash(clamp(impact / 35, 0.1, 1.2) * vol);
     }
-    if (car === pl) { this.rig.addShake(clamp(impact / 25, 0.1, 1)); this.hud.flashDamage(clamp(impact / 30, 0.2, 1)); }
+    if (car === pl) { this.rig.addShake(clamp(impact / 25, 0.1, 1)); this.hud.flashDamage(clamp(impact / 30, 0.2, 1)); this.input.vibrate(120 + impact * 8, clamp(impact / 20, 0.25, 1), clamp(impact / 28, 0.15, 0.8)); }
     // static damage
     if (!other) {
       const dmg = Math.max(0, impact - 7) * 0.006 / (car.spec.armor || 1) * (car.role === 'traffic' ? 0 : 1) * (car.role === 'cop' ? 1.2 : car.role === 'racer' ? 0.5 : 1);
@@ -804,7 +806,7 @@ export class Game {
       else if (this.state === 'playing' && !pl.wrecked && this.respawnT <= 0) {
         const d = this.inputLocked ? { steer: 0, throttle: 0, brake: 0, handbrake: 0, nitro: 0 } : input.drive(dtReal);
         Object.assign(pl.input, d);
-        if (pl.nitroActive === false && d.nitro && pl.nitro > 0.05 && !this._nitroWas) { this.audio.nitroStart(); this.rig.addShake(0.3); }
+        if (pl.nitroActive === false && d.nitro && pl.nitro > 0.05 && !this._nitroWas) { this.audio.nitroStart(); this.rig.addShake(0.3); this.input.vibrate(260, 0.45, 0.7); }
         this._nitroWas = d.nitro && pl.nitro > 0.05;
         if (input.hit('KeyR', 'PadBack')) this.resetPlayer();
         if (this.mode === 'cop') this.copAbilities(dt);
@@ -1139,7 +1141,7 @@ export class Game {
           c.flatTimer = 9;
           this.damage(c, 0.22, null);
           this.vfx.sparks(c.pos.x, c.pos.y, c.pos.z, 0, 0, 30, 1);
-          if (c === this.player) { this.audio.spikes(); this.notify('SPIKED!', 'Tires punctured!', '#ff3030'); this.rig.addShake(0.6); this.hud.flashDamage(0.6); }
+          if (c === this.player) { this.audio.spikes(); this.notify('SPIKED!', 'Tires punctured!', '#ff3030'); this.rig.addShake(0.6); this.input.vibrate(450, 0.9, 0.6); this.hud.flashDamage(0.6); }
           else if (c.pos.distanceTo(this.player.pos) < 150) { this.audio.spikes(); if (this.mode === 'cop') this.notify('SPIKED!', `${c.name} hit the spikes`, '#3aa0ff'); }
         }
       }

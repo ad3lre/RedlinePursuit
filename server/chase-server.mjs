@@ -56,7 +56,7 @@ wss.on('connection', (ws) => {
     switch (m.t) {
       case 'hello': me.name = clean(m.name); room(); break;
       case 'ready': {
-        me.name = clean(m.name || me.name); me.role = m.role === 'cop' ? 'cop' : 'racer'; me.car = (m.car | 0) % 3; me.mode = ['race', 'cop', 'free'].includes(m.mode) ? m.mode : 'race';
+        me.name = clean(m.name || me.name); me.role = m.role === 'cop' ? 'cop' : 'racer'; me.car = (m.car | 0) % 4; me.mode = ['race', 'cop', 'free'].includes(m.mode) ? m.mode : 'race';
         me.state = 'ready';
         const h = players.get(hostId());
         if (session.running && h && h.id !== me.id && h.state === 'playing') send(h.ws, { t: 'joinreq', from: me.id, name: me.name, role: me.role, car: me.car });

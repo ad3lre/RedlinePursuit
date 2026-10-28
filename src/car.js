@@ -12,6 +12,7 @@ export const PLAYER_CARS = [
   { id: 'viper', name: 'VIPER GT', kind: 'super', top: 88, accel: 17.5, grip: 9.5, steer: 1.0, mass: 1.0, armor: 1.0, color: 0xc8101a, color2: 0x101010, livery: 'stripe', desc: 'Balanced supercar' },
   { id: 'kaiser', name: 'KAISER RS', kind: 'gt', top: 96, accel: 15.8, grip: 8.6, steer: 0.9, mass: 1.1, armor: 1.1, color: 0xe8ecf0, color2: 0x1846ff, livery: 'stripe', desc: 'Top-speed GT coupe' },
   { id: 'bruiser', name: 'BRUISER V8', kind: 'muscle', top: 85, accel: 19, grip: 8.8, steer: 0.95, mass: 1.45, armor: 1.5, color: 0xff7a00, color2: 0x111111, livery: 'split', desc: 'Ultimate ramming muscle car' },
+  { id: 'cyber', name: 'CYBERTRUCK', kind: 'suv', model: 'cybertruck', top: 80, accel: 15.5, grip: 8.0, steer: 0.82, mass: 1.9, armor: 1.9, color: 0xb8bcc2, color2: 0x111111, livery: 'plain', desc: 'Stainless-steel armoured pickup' },
 ];
 export const RACER_COLORS = [[0x1ec8ff, 0x101010], [0x9aff1e, 0x101010], [0xffd400, 0x101010], [0xa020ff, 0xffffff], [0xffffff, 0xff2050], [0x202020, 0xff6a00]];
 // Traffic uses the "Generic passenger car pack" models with their own baked textures (no recolour). `w` = spawn weight.
