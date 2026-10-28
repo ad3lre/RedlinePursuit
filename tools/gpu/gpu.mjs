@@ -54,4 +54,21 @@ if (scen === 'city') {
   await pg.evaluate(() => { const { game, world, rig } = window.__rp; game.player.place(130, 240, 3.5, 20); rig.snap = true; });
   await pg.keyboard.down('KeyW'); await sleep(1800); await pg.screenshot({ path: `${out}/city_a.png` }); await sleep(2500); await pg.screenshot({ path: `${out}/city_b.png` }); say(await stats());
 }
+if (scen === 'cyber') {
+  // 4th car (Cybertruck): garage turntable, then driving in chase / hood / cockpit-ish cams
+  await sleep(800); await pg.click('#title'); await sleep(1200); await pg.click('[data-mode="free"]'); await sleep(2000);
+  for (let i = 0; i < 3; i++) { await pg.click('#car-next'); await sleep(300); }
+  say(await pg.evaluate(() => ({ name: document.getElementById('car-name').textContent, idx: document.getElementById('car-idx').textContent })));
+  await sleep(1800); await pg.screenshot({ path: `${out}/cyber_garage_a.png` }); await sleep(4500); await pg.screenshot({ path: `${out}/cyber_garage_b.png` });
+  say(await pg.evaluate(() => { const c = window.__rp.game.cars.find((x) => x.role === 'player'); let t = 0; c.model.root.traverse((o) => { if (o.isMesh) t += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3; }); return { tris: Math.round(t), dims: c.dims, wheels: c.model.wheels.length }; }));
+  await pg.click('#btn-start'); for (let i = 0; i < 40; i++) { await sleep(500); if ((await pg.evaluate(() => window.__rp.game.state)) === 'playing') break; }
+  await place('COAST HIGHWAY', 40, 60);
+  await pg.evaluate(() => { window.__ft = []; let l = performance.now(); const f = (n) => { window.__ft.push(n - l); l = n; requestAnimationFrame(f); }; requestAnimationFrame(f); });
+  await pg.keyboard.down('KeyW'); await sleep(2500); await pg.screenshot({ path: `${out}/cyber_chase.png` });
+  await pg.keyboard.press('KeyC'); await sleep(1500); await pg.screenshot({ path: `${out}/cyber_cam2.png` });
+  await pg.keyboard.press('KeyC'); await sleep(1500); await pg.screenshot({ path: `${out}/cyber_cam3.png` });
+  await pg.keyboard.press('KeyC'); await sleep(1500); await pg.screenshot({ path: `${out}/cyber_cam4.png` });
+  const s = await pg.evaluate(() => { const a = window.__ft.slice(20).sort((x, y) => x - y); const avg = a.reduce((x, y) => x + y, 0) / a.length; return { frames: a.length, fps: +(1000 / avg).toFixed(1), p95_ms: +a[Math.floor(a.length * 0.95)].toFixed(1), worst_ms: +a[a.length - 1].toFixed(1) }; });
+  say({ ...s, ...(await stats()) });
+}
 say({ errors: errs.slice(0, 4) }); await br.close(); srv.close();

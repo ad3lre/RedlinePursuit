@@ -45,3 +45,4 @@ tmp/
 # Do NOT ignore game.js unless you switch to an automated GitHub Actions build workflow.
 shots/
 assets/env_src/
+assets/source/cybertruck_*.glb

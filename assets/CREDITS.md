@@ -14,6 +14,12 @@
 - Regenerate: `node tools/optimize.mjs assets/source/carconcept.glb assets/models/concept_hi.glb 1 'Engine|WindshieldWipers'` and
   `node tools/optimize.mjs assets/source/carconcept.glb assets/models/concept_lo.glb 1 'Interior|Engine|Wipers|HoodUnder|Pedal|Seats|Plate'`
 
+## Tesla Cybertruck (`assets/models/cybertruck_hi.glb` / `cybertruck_lo.glb`)
+- "Tesla Cybertruck" by **TAIGA-ZOE** on Sketchfab: https://sketchfab.com/3d-models/tesla-cybertruck-8950fc178e254c9198b2a8555ef1590a
+- Licensed under **Creative Commons Attribution 4.0 (CC BY 4.0)**: https://creativecommons.org/licenses/by/4.0/ . Commercial use allowed with credit.
+- Changes: rescaled to metres, nose turned to +Z, fused axle meshes split into four wheels (tyres decimated), interior simplified (hi) or removed (lo), textures resized (2048 / 512 px WebP), meshopt-compressed. Source (not committed, 62 MB): `assets/source/cybertruck_hi_src.glb`; pipeline: `node tools/prepcybertruck.mjs assets/source/cybertruck_hi_src.glb assets/models/cybertruck_hi.glb hi` (and `... _lo.glb lo`).
+- **Tesla / Cybertruck are trademarks of Tesla, Inc.; verify trademark situation before any public/commercial release** (same caveat as the Ferrari).
+
 ## Generic passenger car pack (traffic + rival cars: sedan, wagon, hatchback, compact, coupe, minivan, SUV, offroad, pickup, sport)
 - "Generic passenger car pack" by **Comrade1280** on Sketchfab: https://sketchfab.com/3d-models/generic-passenger-car-pack-20f9af9b8a404d5cb022ac6fe87f21f5
 - Licensed under **Creative Commons Attribution 4.0 (CC BY 4.0)**: https://creativecommons.org/licenses/by/4.0/ . Commercial use allowed with credit.
