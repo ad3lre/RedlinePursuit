@@ -1,18 +1,10 @@
 // ===== Synthesized audio: realistic engine, gear shifts, driving surfaces, sirens, SFX =====
 import { clamp } from './util.js';
 import { Music } from './music.js';
+import { resolveEngine, firingHz, absRpm } from './engineProfiles.js';
+import { buildEngine, updateEngine, buildOtherEngine, updateOtherEngine } from './engineAudio.js';
 
 const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
-
-// Per-car engine acoustic profiles: cylinder firing order, idle/redline Hz, exhaust formants & burble
-const PROFILES = {
-  muscle: { f0: 27, fSpan: 112, sub: 0.72, h05: 0.58, h15: 0.42, h2: 0.35, h3: 0.16, lope: 6.5, lopeAmt: 0.28, fA: 125, fB: 430, qA: 4.2, qB: 3.0, turbo: 0.25, whine: 0.5, burble: 1.4, red: 0.93 },
-  super:  { f0: 44, fSpan: 245, sub: 0.28, h05: 0.18, h15: 0.50, h2: 0.58, h3: 0.42, lope: 11,  lopeAmt: 0.06, fA: 240, fB: 960, qA: 3.4, qB: 4.2, turbo: 0.85, whine: 1.1, burble: 1.1, red: 0.94 },
-  gt:     { f0: 36, fSpan: 195, sub: 0.44, h05: 0.30, h15: 0.38, h2: 0.48, h3: 0.30, lope: 8.5, lopeAmt: 0.12, fA: 175, fB: 660, qA: 3.6, qB: 3.4, turbo: 1.15, whine: 0.85, burble: 1.25, red: 0.93 },
-  suv:    { f0: 29, fSpan: 128, sub: 0.62, h05: 0.45, h15: 0.30, h2: 0.30, h3: 0.14, lope: 7.0, lopeAmt: 0.18, fA: 135, fB: 460, qA: 3.8, qB: 2.6, turbo: 0.45, whine: 0.4, burble: 0.7, red: 0.92 },
-  sedan:  { f0: 33, fSpan: 155, sub: 0.38, h05: 0.22, h15: 0.25, h2: 0.40, h3: 0.20, lope: 8.0, lopeAmt: 0.08, fA: 165, fB: 580, qA: 3.0, qB: 2.5, turbo: 0.35, whine: 0.35, burble: 0.5, red: 0.93 },
-  truck:  { f0: 21, fSpan: 78,  sub: 0.82, h05: 0.62, h15: 0.35, h2: 0.24, h3: 0.10, lope: 5.2, lopeAmt: 0.24, fA: 98,  fB: 310, qA: 4.5, qB: 2.8, turbo: 1.35, whine: 0.6, burble: 0.3, red: 0.90 },
-};
 
 function makeCurve(fn, n = 1024) {
   const c = new Float32Array(n);
@@ -84,8 +76,23 @@ export class AudioSys {
     if (!this.ready) return;
     const s = this.settings;
     this.master.gain.value = s.master;
-    this.musicBus.gain.value = s.music * 0.55;
+    const duck = this._dramaDuck ?? 1;
+    this.musicBus.gain.value = s.music * 0.55 * duck;
     this.sfxBus.gain.value = s.sfx;
+  }
+
+  /** Pursuit drama: duck music slightly under chaos, push BPM when heat is high. */
+  setDrama(level = 0, heat = 0) {
+    if (!this.ready) return;
+    // level 0..3, heat 0..5 — leave room for engine/sirens at peak chase
+    const duck = 1 - clamp(level * 0.06 + heat * 0.035, 0, 0.28);
+    this._dramaDuck = duck;
+    const s = this.settings;
+    this.musicBus.gain.value = s.music * 0.55 * duck;
+    if (this.music) {
+      const bpm = level >= 3 ? 138 : level >= 2 ? 132 : 128;
+      this.music.bpm = bpm;
+    }
   }
 
   noiseSrc(loop = true, pink = false) {
@@ -100,68 +107,8 @@ export class AudioSys {
     const bp = (f, q) => { const flt = ctx.createBiquadFilter(); flt.type = 'bandpass'; flt.frequency.value = f; flt.Q.value = q; return flt; };
     const lp = (f, q = 0.7) => { const flt = ctx.createBiquadFilter(); flt.type = 'lowpass'; flt.frequency.value = f; flt.Q.value = q; return flt; };
 
-    // ---------- MULTI-HARMONIC ENGINE + DUAL EXHAUST RESONATOR + TRANSMISSION ----------
-    const e = (this.engine = {});
-    e.out = ctx.createGain(); e.out.gain.value = 0; e.out.connect(this.sfxBus);
-    e.cabinLP = lp(6500, 0.8); e.cabinLP.connect(e.out);
-
-    // Exhaust body resonators (A: chest thump, B: throat rasp, C: high metallic bark) + main lowpass
-    e.resA = bp(150, 3.8); e.resAG = ctx.createGain(); e.resAG.gain.value = 0.72;
-    e.resB = bp(580, 3.2); e.resBG = ctx.createGain(); e.resBG.gain.value = 0.52;
-    e.resC = bp(1550, 2.2); e.resCG = ctx.createGain(); e.resCG.gain.value = 0.25;
-    e.filter = lp(1800, 1.9);
-    e.shaper = ctx.createWaveShaper();
-    e.shaper.curve = makeCurve((x) => Math.tanh(x * 3.1 + 0.14 * x * x) - 0.05);
-    e.shaper.oversample = '2x';
-    e.am = ctx.createGain(); e.am.gain.value = 0.76;
-
-    // Harmonic stack: sub-octave (V8 rumble), half-order (cross-plane), fundamental pair, 1.5x (V6/V10), 2x, 3x
-    e.oSub = mk('triangle', 30); e.gSub = ctx.createGain(); e.gSub.gain.value = 0.5;
-    e.o05 = mk('square', 30);    e.g05 = ctx.createGain();  e.g05.gain.value = 0.35;
-    e.o1 = mk('sawtooth', 60);   e.o1b = mk('sawtooth', 60.5);
-    e.o15 = mk('sawtooth', 90);  e.g15 = ctx.createGain();  e.g15.gain.value = 0.35;
-    e.o2 = mk('square', 120);    e.g2 = ctx.createGain();   e.g2.gain.value = 0.4;
-    e.o3 = mk('sawtooth', 180);  e.g3 = ctx.createGain();   e.g3.gain.value = 0.22;
-
-    // Firing pulse AM + idle lope wobble + redline limiter flutter
-    e.lfo = mk('sine', 30); e.lfoG = ctx.createGain(); e.lfoG.gain.value = 0.28;
-    e.lope = mk('sine', 7.5); e.lopeG = ctx.createGain(); e.lopeG.gain.value = 0;
-    e.lim = mk('square', 19); e.limG = ctx.createGain(); e.limG.gain.value = 0;
-    e.lfo.connect(e.lfoG); e.lfoG.connect(e.am.gain);
-    e.lope.connect(e.lopeG); e.lopeG.connect(e.o1.frequency); e.lopeG.connect(e.o1b.frequency);
-    e.lim.connect(e.limG); e.limG.connect(e.am.gain);
-
-    e.oSub.connect(e.gSub); e.gSub.connect(e.am);
-    e.o05.connect(e.g05);   e.g05.connect(e.am);
-    e.o1.connect(e.am);     e.o1b.connect(e.am);
-    e.o15.connect(e.g15);   e.g15.connect(e.am);
-    e.o2.connect(e.g2);     e.g2.connect(e.am);
-    e.o3.connect(e.g3);     e.g3.connect(e.am);
-
-    e.am.connect(e.shaper);
-    e.shaper.connect(e.filter); e.filter.connect(e.cabinLP);
-    e.shaper.connect(e.resA); e.resA.connect(e.resAG); e.resAG.connect(e.cabinLP);
-    e.shaper.connect(e.resB); e.resB.connect(e.resBG); e.resBG.connect(e.cabinLP);
-    e.shaper.connect(e.resC); e.resC.connect(e.resCG); e.resCG.connect(e.cabinLP);
-
-    // Combustion/exhaust chuff + induction roar under load
-    e.nz = this.noiseSrc(true, true); e.nzF = bp(650, 1.2); e.nzG = ctx.createGain(); e.nzG.gain.value = 0;
-    e.nz.connect(e.nzF); e.nzF.connect(e.nzG); e.nzG.connect(e.cabinLP);
-    e.exNz = this.noiseSrc(true, true); e.exF = lp(240, 2.0); e.exG = ctx.createGain(); e.exG.gain.value = 0;
-    e.exNz.connect(e.exF); e.exF.connect(e.exG); e.exG.connect(e.shaper);
-
-    // Turbocharger spool whistle + boost hiss + straight-cut gearbox whine
-    e.turbo = mk('sine', 2400); e.turbo2 = mk('triangle', 4800);
-    e.turboG = ctx.createGain(); e.turboG.gain.value = 0;
-    const t2g = ctx.createGain(); t2g.gain.value = 0.25;
-    e.turbo.connect(e.turboG); e.turbo2.connect(t2g); t2g.connect(e.turboG); e.turboG.connect(this.sfxBus);
-    e.whine = mk('sine', 600); e.whine2 = mk('triangle', 1200);
-    e.whineF = bp(1200, 3.5); e.whineG = ctx.createGain(); e.whineG.gain.value = 0;
-    const w2g = ctx.createGain(); w2g.gain.value = 0.35;
-    e.whine.connect(e.whineF); e.whine2.connect(w2g); w2g.connect(e.whineF); e.whineF.connect(e.whineG); e.whineG.connect(this.sfxBus);
-    e.spool = 0;
-
-    [e.oSub, e.o05, e.o1, e.o1b, e.o15, e.o2, e.o3, e.lfo, e.lope, e.lim, e.nz, e.exNz, e.turbo, e.turbo2, e.whine, e.whine2].forEach((o) => o.start());
+    // ---------- MULTI-LAYER ENGINE (per-car profiles: V10/V8/I6/flat-6/I4/diesel/EV) ----------
+    this.engine = buildEngine(ctx, (loop, pink) => this.noiseSrc(loop, pink), this.sfxBus);
 
     // ---------- TIRE ROLL, SLIP HOWL, SCREECH & BRAKE SQUEAL ----------
     const t = (this.tire = {});
@@ -224,16 +171,7 @@ export class AudioSys {
     });
 
     // ---------- 4 RIVAL / TRAFFIC / COP PROXIMITY ENGINE VOICES (with Doppler & panning) ----------
-    this.otherEngines = [0, 1, 2, 3].map(() => {
-      const o1 = mk('sawtooth', 65), o2 = mk('square', 32.5);
-      const g2 = ctx.createGain(); g2.gain.value = 0.5;
-      const f = bp(260, 1.8), lpf = lp(1400, 1.2);
-      const g = ctx.createGain(); g.gain.value = 0;
-      const p = ctx.createStereoPanner ? ctx.createStereoPanner() : ctx.createGain();
-      o1.connect(f); o2.connect(g2); g2.connect(f); f.connect(lpf); lpf.connect(g); g.connect(p); p.connect(this.sfxBus);
-      o1.start(); o2.start();
-      return { o1, o2, f, lpf, g, p };
-    });
+    this.otherEngines = [0, 1, 2, 3].map(() => buildOtherEngine(ctx, this.sfxBus));
 
     this.lastThrottle = 0; this.shiftCut = 0; this.shiftDir = 0; this.roadSeamT = 0; this.burbleCd = 0;
   }
@@ -241,97 +179,13 @@ export class AudioSys {
   update(dt, st) {
     if (!this.ready) return;
     const ctx = this.ctx, now = ctx.currentTime;
-    const e = this.engine;
     const on = st.active ? 1 : 0;
-    const pr = PROFILES[st.kind] || PROFILES.super;
-    const rpm = clamp(st.rpm ?? 0.2, 0.12, 1.05);
-    const thr = clamp(st.throttle ?? 0, 0, 1);
     const brk = clamp(st.brake ?? 0, 0, 1);
     const sp = st.speed ?? 0;
-    const gear = st.gear || 1;
     const fp = st.fp ? 1 : 0;
 
-    // Gear shift trigger: upshift ignition cut + pop + clutch clunk, or downshift rev-match throttle blip
-    if (st.shifted && on) {
-      this.shiftDir = st.shifted;
-      this.shiftCut = st.shifted > 0 ? 0.13 : 0.16;
-      this.gearShift(st.shifted, rpm, thr, pr);
-    }
-    if (this.shiftCut > 0) this.shiftCut = Math.max(0, this.shiftCut - dt);
-
-    // Pitch transient during shift: brief dip on upshift cut, sharp rev-match spike on downshift
-    const shiftMod = this.shiftCut > 0 ? (this.shiftDir > 0 ? -0.07 * (this.shiftCut / 0.13) : 0.14 * Math.sin((this.shiftCut / 0.16) * Math.PI)) : 0;
-    const effRpm = clamp(rpm + shiftMod, 0.12, 1.08);
-    const f = pr.f0 + effRpm * pr.fSpan;
-    const k = 0.032;
-
-    e.oSub.frequency.setTargetAtTime(f * 0.5, now, k);
-    e.o05.frequency.setTargetAtTime(f * 0.502, now, k);
-    e.o1.frequency.setTargetAtTime(f, now, k);
-    e.o1b.frequency.setTargetAtTime(f * 1.007, now, k);
-    e.o15.frequency.setTargetAtTime(f * 1.5, now, k);
-    e.o2.frequency.setTargetAtTime(f * 2, now, k);
-    e.o3.frequency.setTargetAtTime(f * 3, now, k);
-    e.lfo.frequency.setTargetAtTime(f * 0.5, now, k);
-    e.lope.frequency.setTargetAtTime(pr.lope, now, 0.1);
-
-    // Idle cam lope fades out as revs climb; redline fuel-cut limiter chatters above pr.red
-    const idleFactor = clamp(1 - (effRpm - 0.18) * 3.8, 0, 1) * (1 - thr * 0.7);
-    e.lopeG.gain.setTargetAtTime(idleFactor * pr.lopeAmt * f * 0.12, now, 0.06);
-    const atLimiter = effRpm > pr.red && thr > 0.7 ? clamp((effRpm - pr.red) * 18, 0, 1) : 0;
-    e.limG.gain.setTargetAtTime(atLimiter * 0.48, now, 0.015);
-
-    // Harmonic balance shifts from deep sub-rumble at low RPM to screaming upper harmonics under high-RPM load
-    const hiLoad = (0.35 + 0.65 * thr) * clamp((effRpm - 0.25) / 0.75, 0, 1);
-    e.gSub.gain.setTargetAtTime(pr.sub * (1.15 - effRpm * 0.4), now, 0.05);
-    e.g05.gain.setTargetAtTime(pr.h05 * (0.7 + thr * 0.45), now, 0.05);
-    e.g15.gain.setTargetAtTime(pr.h15 * (0.55 + hiLoad * 0.6), now, 0.05);
-    e.g2.gain.setTargetAtTime(pr.h2 * (0.5 + hiLoad * 0.75), now, 0.05);
-    e.g3.gain.setTargetAtTime(pr.h3 * (0.3 + hiLoad * 0.95), now, 0.05);
-
-    // Exhaust formant resonators track RPM + load; ignition cut dips gain sharply on upshift
-    e.resA.frequency.setTargetAtTime(pr.fA * (0.85 + effRpm * 0.55), now, 0.05); e.resA.Q.setTargetAtTime(pr.qA, now, 0.1);
-    e.resB.frequency.setTargetAtTime(pr.fB * (0.8 + effRpm * 0.75 + thr * 0.2), now, 0.05); e.resB.Q.setTargetAtTime(pr.qB, now, 0.1);
-    e.resC.frequency.setTargetAtTime(1300 + effRpm * 1600 + thr * 500, now, 0.05);
-    e.filter.frequency.setTargetAtTime(280 + thr * 2400 + effRpm * 2100 + (st.nitro ? 900 : 0), now, 0.045);
-    e.cabinLP.frequency.setTargetAtTime(fp ? 3600 + thr * 1400 : 6800, now, 0.08);
-
-    const cutMult = this.shiftCut > 0 && this.shiftDir > 0 ? 0.18 : 1.0;
-    const engGain = on * cutMult * (0.15 + thr * 0.12 + effRpm * 0.07 + (st.nitro ? 0.04 : 0));
-    e.out.gain.setTargetAtTime(engGain, now, this.shiftCut > 0 ? 0.012 : 0.055);
-
-    // Intake suction roar + exhaust pulse chuff
-    e.nzG.gain.setTargetAtTime(on * (0.015 + thr * effRpm * 0.15), now, 0.06);
-    e.nzF.frequency.setTargetAtTime(380 + effRpm * 1700 + thr * 500, now, 0.07);
-    e.exG.gain.setTargetAtTime(on * (0.04 + thr * 0.11) * (1.2 - effRpm * 0.4), now, 0.06);
-    e.exF.frequency.setTargetAtTime(f * 1.6, now, 0.05);
-
-    // Turbo spool inertia + blowoff flutter on sharp lift-off + deceleration exhaust crackle/burble
-    const targetSpool = clamp(thr * Math.max(0, effRpm - 0.28) * 1.45 + (st.nitro ? 0.35 : 0), 0, 1);
-    e.spool += (targetSpool - e.spool) * Math.min(1, dt * (targetSpool > e.spool ? 3.2 : 6.5));
-    e.turbo.frequency.setTargetAtTime(1650 + e.spool * 3600, now, 0.08);
-    e.turbo2.frequency.setTargetAtTime(3300 + e.spool * 5200, now, 0.08);
-    e.turboG.gain.setTargetAtTime(on * e.spool * e.spool * 0.022 * pr.turbo, now, 0.08);
-
-    // Straight-cut transmission gear whine (pitched by wheel speed + current gear mesh ratio)
-    const wf = 190 + sp * 18 + gear * 85 + effRpm * 260;
-    e.whine.frequency.setTargetAtTime(wf, now, 0.05);
-    e.whine2.frequency.setTargetAtTime(wf * 2.02, now, 0.05);
-    e.whineF.frequency.setTargetAtTime(wf * 1.35, now, 0.06);
-    const loadWhine = (0.35 + 0.65 * Math.abs(thr - 0.35)) * clamp(sp / 55, 0, 1);
-    e.whineG.gain.setTargetAtTime(on * loadWhine * 0.018 * pr.whine * (fp ? 1.35 : 1), now, 0.07);
-
-    // Lift-off blowoff valve flutter + overrun exhaust burble/backfire
-    if (this.lastThrottle > 0.72 && thr < 0.22 && effRpm > 0.52 && on) {
-      if (e.spool > 0.35 && pr.turbo > 0.3) this.blowoff(e.spool * pr.turbo);
-      if (Math.random() < 0.75) this.backfire(clamp(effRpm * pr.burble, 0.4, 1.3));
-    }
-    this.lastThrottle = thr;
-    this.burbleCd = Math.max(0, this.burbleCd - dt);
-    if (on && thr < 0.12 && effRpm > 0.45 && sp > 14 && this.burbleCd <= 0 && Math.random() < dt * 9 * pr.burble) {
-      this.burblePop(0.35 + effRpm * 0.5);
-      this.burbleCd = 0.055 + Math.random() * 0.11;
-    }
+    updateEngine(this.engine, dt, st, now, this);
+    const effRpm = clamp(st.rpm ?? 0.2, 0.12, 1.05);
 
     // ---------- TIRE ROLLING, EXPANSION SEAMS, SLIP HOWL, SCREECH & BRAKE SQUEAL ----------
     const spNorm = clamp(sp / 75, 0, 1);
@@ -423,15 +277,7 @@ export class AudioSys {
     this.otherEngines.forEach((oe, i) => {
       const o = others[i];
       if (!o || !on) { oe.g.gain.setTargetAtTime(0, now, 0.08); return; }
-      const opr = PROFILES[o.kind] || PROFILES.sedan;
-      const dop = clamp(343 / (343 + (o.vrel || 0) * 1.1), 0.78, 1.28);
-      const of = (opr.f0 + (o.rpm || 0.4) * opr.fSpan) * dop;
-      oe.o1.frequency.setTargetAtTime(of, now, 0.04);
-      oe.o2.frequency.setTargetAtTime(of * 0.5, now, 0.04);
-      oe.f.frequency.setTargetAtTime(of * 2.4, now, 0.05);
-      oe.lpf.frequency.setTargetAtTime(clamp(2600 - o.d * 14, 420, 2600), now, 0.06);
-      oe.g.gain.setTargetAtTime(o.gain * (0.045 + (o.thr || 0.4) * 0.04), now, 0.06);
-      if (oe.p.pan) oe.p.pan.setTargetAtTime(clamp(o.pan, -0.92, 0.92), now, 0.045);
+      updateOtherEngine(oe, o, now);
     });
   }
 
@@ -467,8 +313,9 @@ export class AudioSys {
   }
 
   // Realistic gear shift: mechanical linkage clunk + clutch thump + upshift exhaust bark / turbo chirp OR downshift rev-match blip
-  gearShift(dir = 1, rpm = 0.7, thr = 0.8, pr = PROFILES.super) {
+  gearShift(dir = 1, rpm = 0.7, thr = 0.8, pr = null) {
     if (!this.ready) return;
+    pr = pr || resolveEngine(null, 'super');
     // Mechanical dog-box / synchro engagement clunk + driveline thump
     this.tone({ type: 'triangle', f0: 145, f1: 48, dur: 0.065, gain: 0.22, attack: 0.002 });
     this.burst({ dur: 0.032, type: 'bandpass', f0: 2100, f1: 950, q: 3.5, gain: 0.11, attack: 0.001 });
@@ -479,8 +326,8 @@ export class AudioSys {
       this.tone({ t: 0.015, type: 'sawtooth', f0: 110 + rpm * 60, f1: 42, dur: 0.075, gain: 0.18 * load });
       if (thr > 0.65 && rpm > 0.55 && pr.turbo > 0.4) this.blowoff(0.55 * pr.turbo);
     } else {
-      // Downshift: throttle blip growl + overrun pop
-      const bf = pr.f0 + clamp(rpm + 0.18, 0.3, 1) * pr.fSpan;
+      // Downshift: throttle blip growl + overrun pop (pitched to real firing Hz)
+      const bf = firingHz(pr, absRpm(pr, clamp(rpm + 0.18, 0.3, 1)));
       this.tone({ t: 0.01, type: 'sawtooth', f0: bf * 0.85, f1: bf * 1.25, dur: 0.11, gain: 0.14, attack: 0.012 });
       this.burst({ t: 0.02, dur: 0.09, type: 'bandpass', f0: bf * 3.2, f1: bf * 1.8, q: 2.2, gain: 0.12, pink: true });
       if (rpm > 0.45 && Math.random() < 0.65) this.burblePop(0.45);
@@ -557,9 +404,10 @@ export class AudioSys {
   }
   nearMiss() {
     if (!this.ready) return;
-    // Fast Doppler horn/air whoosh pass-by
-    this.burst({ dur: 0.36, type: 'bandpass', f0: 1850, f1: 320, q: 2.2, gain: 0.28, attack: 0.04, pink: true });
-    this.tone({ type: 'sawtooth', f0: 390, f1: 240, dur: 0.32, gain: 0.08, attack: 0.05 });
+    // Fast Doppler horn/air whoosh pass-by — louder so style moments punch through the mix
+    this.burst({ dur: 0.42, type: 'bandpass', f0: 2100, f1: 280, q: 2.0, gain: 0.42, attack: 0.03, pink: true });
+    this.tone({ type: 'sawtooth', f0: 420, f1: 180, dur: 0.36, gain: 0.12, attack: 0.04 });
+    this.tone({ type: 'sine', f0: 90, f1: 48, dur: 0.22, gain: 0.18, attack: 0.01 }); // chest thump
   }
   checkpoint() { if (!this.ready) return; [0, 4, 7, 12].forEach((n, i) => this.tone({ t: i * 0.06, type: 'triangle', f0: mtof(76 + n), dur: 0.25, gain: 0.18, rev: 0.4 })); }
   beep(high = false) { if (this.ready) this.tone({ type: 'square', f0: high ? 1320 : 660, dur: high ? 0.6 : 0.18, gain: 0.12, rev: 0.3 }); }

@@ -3,7 +3,9 @@ import * as THREE from 'three';
 import { buildCar, buildInterior } from './carModel.js';
 import { clamp, lerp, damp, wrapAngle } from './util.js';
 import { glowTexture } from './textures.js';
-const RIDE = 0.02; // tyre contact height above the road surface (was 0.17 -> cars visibly hovered)
+import { resolveEngine } from './engineProfiles.js';
+import { G, G_VERT } from './units.js';
+const RIDE = 0.02; // tyre contact height above the road surface (m)
 
 let blobTex = null, blurTex = null;
 const blobMat = () => (blobTex ||= glowTexture('rgba(0,0,0,0.9)', 'rgba(0,0,0,0)', 128));
@@ -14,6 +16,8 @@ export const PLAYER_CARS = [
   { id: 'bruiser', name: 'BRUISER V8', kind: 'muscle', top: 85, accel: 19, grip: 8.8, steer: 0.95, mass: 1.45, armor: 1.5, color: 0xff7a00, color2: 0x111111, livery: 'split', desc: 'Ultimate ramming muscle car' },
   { id: 'cyber', name: 'CYBERTRUCK', kind: 'suv', cg: 0.74, model: 'cybertruck', top: 80, accel: 15.5, grip: 8.0, steer: 0.82, mass: 1.9, armor: 1.9, color: 0xb8bcc2, color2: 0x111111, livery: 'plain', desc: 'Stainless-steel armoured pickup' },
   { id: 'gt3rs', name: 'GT3 RS', kind: 'super', cg: 0.44, model: 'gt3rs', top: 92, accel: 18, grip: 10.2, steer: 1.08, mass: 0.95, armor: 0.85, color: 0xd8d018, color2: 0x111111, livery: 'plain', desc: 'Track-bred rear-engine weapon' },
+  { id: 'vito', name: 'VITO VAN', kind: 'suv', cg: 0.78, model: 'vito', top: 72, accel: 12.5, grip: 7.4, steer: 0.78, mass: 2.1, armor: 1.7, color: 0xf2f2f2, color2: 0x111111, livery: 'plain', desc: 'Workhorse utility van' },
+  { id: 'mini', name: 'MINI COOPER S', kind: 'sedan', cg: 0.5, model: 'mini', top: 78, accel: 16.5, grip: 9.4, steer: 1.18, mass: 0.85, armor: 0.75, color: 0xc8102e, color2: 0x111111, livery: 'plain', desc: 'Pocket rocket hatch' },
 ];
 export const RACER_COLORS = [[0x1ec8ff, 0x101010], [0x9aff1e, 0x101010], [0xffd400, 0x101010], [0xa020ff, 0xffffff], [0xffffff, 0xff2050], [0x202020, 0xff6a00]];
 // Traffic uses the "Generic passenger car pack" models with their own baked textures (no recolour). `w` = spawn weight.
@@ -38,8 +42,8 @@ const tmpN = new THREE.Vector3();
 const colRes = {};
 const UP = new THREE.Vector3(0, 1, 0);
 
-// held-steer ramp: full effect after HOLD_RAMP_S of continuous steering in one direction; HOLD_GAIN = extra steering authority at full hold (+80%)
-const HOLD_RAMP_S = 1.2, HOLD_GAIN = 0.8;
+// held-steer ramp: full effect after HOLD_RAMP_S of continuous steering in one direction; HOLD_GAIN = extra steering authority at full hold
+const HOLD_RAMP_S = 0.7, HOLD_GAIN = 1.05;
 export class Car {
   constructor(game, spec, opts = {}) {
     this.game = game;
@@ -74,12 +78,16 @@ export class Car {
     this.input = { throttle: 0, brake: 0, steer: 0, handbrake: 0, nitro: 0 };
     this.nitro = 0.5; this.nitroActive = false;
     this.health = 1; this.wrecked = false; this.wreckTime = 0;
-    this.drifting = false; this.slip = 0; this.speed = 0; this.vF = 0; this.vR = 0;
+    this.drifting = false; this.wasDrifting = false; this.slip = 0; this.speed = 0; this.vF = 0; this.vR = 0;
+    this.exitBoost = 0; // seconds of post-drift exit boost remaining
     this.flatTimer = 0; this.empTimer = 0;
     this.offroad = false;
     this.wheelSpin = 0;
     this.pitch = 0; this.roll = 0; this.bodyPitch = 0; this.bodyRoll = 0;
-    this.accelLong = 0; this.accelLat = 0;
+    this.accelLong = 0; this.accelLat = 0; // measured body-frame accel (m/s²), IMU-style
+    this.imuLong = 0; this.imuLat = 0; this.imuVert = 0;
+    this.odometer = 0; // metres driven this life
+    this._imuReady = false;
     this.normal = new THREE.Vector3(0, 1, 0);
     this.lastImpact = 0;
     this.gear = 1; this.rpm = 0.2; this.shiftTimer = 0;
@@ -88,8 +96,8 @@ export class Car {
     this.visible = true;
   }
 
-  // lateral grip limit in m/s^2 (no downforce): what the AI plans its corner speeds around
-  gripLimit() { return (this.spec.grip / 7.6) * 9.81; }
+  // lateral grip limit in m/s² (no downforce): what the AI plans its corner speeds around
+  gripLimit() { return (this.spec.grip / 7.6) * G; }
 
   get fwdX() { return Math.sin(this.yaw); }
   get fwdZ() { return Math.cos(this.yaw); }
@@ -101,12 +109,19 @@ export class Car {
     this.angVel = 0; this.vy = 0; this.grounded = true; this.prevG = undefined; this.airTime = 0;
     this.vPitch = undefined; this.vRoll = undefined; this.vLift = undefined; this.slopeVs = undefined;
     this.normal.set(0, 1, 0);
+    this._imuReady = false; this.accelLong = 0; this.accelLat = 0; this.imuLong = 0; this.imuLat = 0; this.imuVert = 0;
+    this.odometer = 0;
     this.syncVisual(0);
   }
 
   addInterior() { this.interior = buildInterior(this.model); }
 
   setVisible(v) { this.visible = v; this.model.root.visible = v; }
+  setShadowCast(on) {
+    if (this._castOn === on) return;
+    this._castOn = on;
+    this.model.root.traverse((o) => { if (o.isMesh) o.castShadow = !!(on && !(o.material && o.material.transparent)); });
+  }
 
   step(dt) {
     if (!this.active) return;
@@ -125,14 +140,14 @@ export class Car {
     this.nitroActive = !!(inp.nitro && this.nitro > 0.01 && inp.throttle > 0.1 && !emp);
     if (this.nitroActive) this.nitro = Math.max(0, this.nitro - dt * (this.role === 'player' ? 0.22 : 0.3));
 
-    let maxV = spec.top * (this.nitroActive ? 1.2 : 1) * (this.flatTimer > 0 ? 0.55 : 1) * (0.82 + 0.18 * this.health) * (emp ? 0.5 : 1);
+    let maxV = spec.top * (this.nitroActive ? 1.22 : 1) * (this.flatTimer > 0 ? 0.55 : 1) * (0.82 + 0.18 * this.health) * (emp ? 0.5 : 1);
     if (this.offroad) maxV *= 0.62;
     if (this.boost) maxV *= this.boost;
+    if (this.exitBoost > 0) { maxV *= 1.12; this.exitBoost = Math.max(0, this.exitBoost - dt); }
 
     // ---- tyre budget ----------------------------------------------------------------------------------------
     // One friction budget (mu*g) shared by braking, driving and cornering ("friction circle"). Surface, damage and
-    // aero downforce (supercars / GTs) scale it. spec.grip 7.6 == mu 1.0.
-    const G = 9.81;
+    // aero downforce (supercars / GTs) scale it. spec.grip 7.6 == mu 1.0. All forces in m/s².
     const rdist = this.offroad ? world.hf.roadDist(this.pos.x, this.pos.z) : 0;
     const surfMu = this.offroad ? (rdist < 3.5 ? 0.82 : 0.6) : 1; // gravel shoulder vs grass / dirt
     this.surfMu = surfMu;
@@ -145,7 +160,8 @@ export class Car {
         if (vF < maxV) {
           const r = clamp(vF / maxV, 0, 1);
           let ad = spec.accel * 0.82 * (1 - Math.pow(r, 1.5) * 0.85) * inp.throttle * (this.boost || 1);
-          if (this.nitroActive) ad += 13;
+          if (this.nitroActive) ad += 15;
+          if (this.exitBoost > 0) ad += 9;
           const trac = muG * 0.97; // traction limit: launches spin the wheels instead of teleporting
           if (ad > trac) ad = trac;
           a += ad; aLong = ad;
@@ -167,6 +183,7 @@ export class Car {
 
     // drift state
     const slip = Math.atan2(vR, Math.max(Math.abs(vF), 1));
+    this.wasDrifting = this.drifting;
     if (inp.handbrake && sp > 14 && Math.abs(inp.steer) > 0.1) this.drifting = true;
     if (this.drifting && ((!inp.handbrake && Math.abs(slip) < 0.1) || sp < 9)) this.drifting = false;
     if (this.drifting && inp.brake > 0.5 && !inp.handbrake && Math.abs(slip) < 0.2) this.drifting = false;
@@ -186,51 +203,50 @@ export class Car {
       const lost = Math.abs(vR - nvR);
       vR = nvR;
       if (this.drifting && vF > 0) vF += lost * 0.45; // keep momentum in drifts
-      // cornering budget (m/s^2): friction circle - driving or braking hard leaves less for turning; cg trims it
+      // cornering budget (m/s^2): friction circle - driving or braking hard leaves slightly less for turning; cg trims it
       const al = Math.min(aLong, muG * 0.97);
-      const circle = Math.sqrt(Math.max(0.12, 1 - (al / muG) ** 2));
-      // held steering: the longer the same direction is held, the more aggressive the turn-in (linear ramp, player only).
-      // It raises steering lock AND the cornering budget together, so the car actually rotates harder instead of just hitting the grip cap.
+      const circle = Math.sqrt(Math.max(0.68, 1 - (al / muG) ** 2 * 0.32));
+      // held steering: the longer the same direction is held, the more aggressive the turn-in (applies to both player and AI so NPCs can make tight turns)
       let hold = 0;
-      if (this.role === 'player') {
-        const sIn = inp.steer;
-        if (Math.abs(sIn) > 0.2) {
-          if (Math.sign(sIn) !== this.holdDir) { this.holdDir = Math.sign(sIn); this.holdT = 0; } // new direction restarts the ramp
-          this.holdT = Math.min(HOLD_RAMP_S, (this.holdT || 0) + dt);
-        } else this.holdT = Math.max(0, (this.holdT || 0) - dt * 4); // released: bleeds off in ~0.3 s
-        hold = (this.holdT || 0) / HOLD_RAMP_S; // 0..1, linear in time held
-      }
+      const sIn = inp.steer;
+      const rampS = this.role === 'player' && !this.game.demo ? HOLD_RAMP_S : 0.45;
+      if (Math.abs(sIn) > 0.18) {
+        if (Math.sign(sIn) !== this.holdDir) { this.holdDir = Math.sign(sIn); this.holdT = 0; }
+        this.holdT = Math.min(rampS, (this.holdT || 0) + dt);
+      } else this.holdT = Math.max(0, (this.holdT || 0) - dt * 4);
+      hold = (this.holdT || 0) / rampS;
       const holdBoost = 1 + HOLD_GAIN * hold;
       this.holdBoost = holdBoost;
-      const capLat = muG * 1.15 * circle * (1 - 0.35 * (cg - 0.5)) * (this.drifting ? 1.75 : 1) * (1 + 0.6 * HOLD_GAIN * hold);
+      const capLat = muG * 1.32 * circle * (1 - 0.28 * (cg - 0.5)) * (this.drifting ? 1.85 : 1) * (1 + 0.7 * HOLD_GAIN * hold);
       // steering: road-wheel angle is *proportional* to the wheel input, and full lock is scaled so it just reaches the grip limit at that speed.
-      // (before: 10% steering already saturated a ~3 g cap, so the car snapped round)
       const wb2 = Math.max(2.2, this.dims.wb * 2);
-      const dMax = (this.drifting ? 0.5 : clamp(Math.atan(wb2 * capLat * spec.steer * holdBoost / Math.max(sp * sp, 25)), 0.02, 0.55 + 0.15 * hold));
-      this.steerAngle = damp(this.steerAngle, inp.steer * dMax, 10, dt);
-      this.steerWheel = damp(this.steerWheel || 0, inp.steer, 12, dt);
+      const dMax = (this.drifting ? 0.58 : clamp(Math.atan(wb2 * capLat * spec.steer * holdBoost / Math.max(sp * sp, 22)), 0.025, 0.72 + 0.18 * hold));
+      this.steerAngle = damp(this.steerAngle, inp.steer * dMax, 14, dt);
+      this.steerWheel = damp(this.steerWheel || 0, inp.steer, 16, dt);
       let target = vF * Math.tan(this.steerAngle) / wb2; // bicycle-model yaw rate
-      target *= (1 + 0.14 * brk) * (1 - 0.1 * acc);      // trail-braking tightens the line, power-on pushes wide
-      const capYaw = Math.min(2.4, capLat / Math.max(sp, 2.5));
+      target *= (1 + 0.18 * brk) * (1 - 0.08 * acc);      // trail-braking tightens the line, power-on pushes wide
+      const capYaw = Math.min(3.1, capLat / Math.max(sp, 2.2));
       target = clamp(target, -capYaw, capYaw);
-      if (this.drifting) target += -slip * 0.6 * Math.sign(vF); // natural counter-yaw
-      else target += -slip * 0.9 * (1 - 0.5 * hold) * clamp(sp / 35, 0, 1) * Math.sign(vF || 1); // straight-line stability: the nose is pulled back toward the direction of travel
-      // yaw response: builds a touch slower at speed and in heavier cars (rotational inertia), instant enough at low speed to stay easy
-      const resp = lerp(9, 6.5, clamp(sp / 60, 0, 1)) / (0.85 + 0.15 * this.mass);
-      this.angVel = damp(this.angVel, target, this.drifting ? 5 : resp, dt);
+      // NPCs need stronger straight-line pull-back — player-tuned low stability makes traffic/cops orbit targets
+      const npc = this.role !== 'player';
+      const stab = npc ? 1.45 : 0.55 * (1 - 0.65 * hold);
+      if (this.drifting) target += -slip * 0.55 * Math.sign(vF); // natural counter-yaw
+      else target += -slip * stab * clamp(sp / 40, 0, 1) * Math.sign(vF || 1);
+      // yaw response: snappy for player; NPCs slower so steerToward doesn't oscillate into doughnuts
+      const resp = (npc ? lerp(6.5, 4.2, clamp(sp / 60, 0, 1)) : lerp(13, 8.5, clamp(sp / 60, 0, 1))) / (0.85 + 0.15 * this.mass);
+      if (npc) target = clamp(target, -2.2, 2.2);
+      this.angVel = damp(this.angVel, target, this.drifting ? (npc ? 4 : 6.5) : resp, dt);
       // cornering scrub: a car that is turned hard sheds a little speed
       if (!this.drifting && sp > 8) vF -= Math.sign(vF) * Math.abs(this.angVel * vF) * 0.012 * dt * 60 * 0.5;
     } else {
       this.angVel *= Math.exp(-0.5 * dt);
     }
     const ax = fx * vF + rx * vR, az = fz * vF + rz * vR;
-    this.accelLong = lerp(this.accelLong, a, 0.1);
-    this.accelLat = lerp(this.accelLat, this.angVel * vF, 0.1);
     this.vel.set(ax, az);
     this.yaw = wrapAngle(this.yaw + this.angVel * dt);
     this.pos.x += ax * dt; this.pos.z += az * dt;
 
-    // vertical
+    // vertical — arcade G_VERT for road stick; IMU still reports real G via measured Δv
     const g = world.heightAt(this.pos.x, this.pos.z) + RIDE;
     const wasGrounded = this.grounded;
     // slope the car is rolling along (m/s of vertical ground motion)
@@ -238,7 +254,7 @@ export class Car {
     // low-pass: a 1-step ground-height jump (mesh seams, segment switches) must not read as a launch ramp
     this.slopeVs = this.slopeVs === undefined || !wasGrounded ? rawSlopeV : this.slopeVs + (rawSlopeV - this.slopeVs) * Math.min(1, dt * 14);
     const slopeV = this.slopeVs;
-    this.vy -= 22 * dt;
+    this.vy -= G_VERT * dt;
     this.pos.y += this.vy * dt;
     // ground adhesion: suspension keeps tyres on the road over crests and dips unless the car is genuinely launched
     // (big vertical speed relative to the surface, or well clear of it). Fixes cars hopping at every grade change.
@@ -262,29 +278,61 @@ export class Car {
     this.vF = this.vel.x * Math.sin(this.yaw) + this.vel.y * Math.cos(this.yaw);
     this.vR = this.vel.x * -Math.cos(this.yaw) + this.vel.y * Math.sin(this.yaw);
     this.speed = this.vel.length();
+    // Measured IMU accel from world velocity delta (m/s²) — what a real accelerometer would integrate
+    {
+      const invDt = 1 / Math.max(dt, 1e-4);
+      if (this._imuReady) {
+        const awx = (this.vel.x - this._px) * invDt;
+        const awz = (this.vel.y - this._pz) * invDt;
+        const awy = (this.vy - this._py) * invDt;
+        const yfx = Math.sin(this.yaw), yfz = Math.cos(this.yaw);
+        const yrx = yfz, yrz = -yfx; // right vector in XZ
+        this.imuLong = awx * yfx + awz * yfz;
+        this.imuLat = awx * yrx + awz * yrz;
+        this.imuVert = awy;
+        // frame-rate independent low-pass for body / HUD (still tracks hard hits)
+        const k = 1 - Math.exp(-dt * 16);
+        this.accelLong += (this.imuLong - this.accelLong) * k;
+        this.accelLat += (this.imuLat - this.accelLat) * k;
+      } else this._imuReady = true;
+      this._px = this.vel.x; this._pz = this.vel.y; this._py = this.vy;
+    }
+    this.odometer += this.speed * dt;
     if (this.flatTimer > 0) this.flatTimer -= dt;
     if (this.empTimer > 0) this.empTimer -= dt;
     this.wheelSpin += (vF / this.dims.wheelR) * dt;
-    // gear/rpm model
-    // hysteresis: upshift at the ratio limit, downshift a bit below it (no gear hunting)
-    const ratios = [0, 16, 29, 42, 56, 71, 999];
+    // gear/rpm model — per-car shift points & redline (EV stays in a single virtual gear)
+    const eng = resolveEngine(spec.id, spec.kind);
     const av = Math.abs(vF);
-    let gear = this.gear || 1;
-    while (gear < 6 && av > ratios[gear]) gear++;
-    while (gear > 1 && av < ratios[gear - 1] * 0.86) gear--;
-    if (gear !== this.gear) {
-      this.shifted = gear > this.gear ? 1 : -1;
-      this.shiftTimer = gear > this.gear ? 0.3 : 0.2; // clutch-in time: revs hang then settle
-      this.gear = gear;
+    if (eng.electric > 0.5) {
+      // Single-speed EV: RPM tracks road speed toward motor redline; no shift events
+      this.gear = 1;
+      this.shifted = 0;
+      const targetRpm = this.grounded
+        ? clamp(av / Math.max(8, spec.top * 1.15), 0, 1) * (0.35 + inp.throttle * 0.65)
+        : clamp(inp.throttle, 0, 1);
+      this.rpm = damp(this.rpm, Math.max(targetRpm, 0.02), 10, dt);
+    } else {
+      const shifts = eng.shiftSpeeds?.length ? eng.shiftSpeeds : [16, 29, 42, 56, 71];
+      const ratios = [0, ...shifts, 999];
+      const maxGear = Math.min(6, shifts.length + 1);
+      let gear = this.gear || 1;
+      while (gear < maxGear && av > ratios[gear]) gear++;
+      while (gear > 1 && av < ratios[gear - 1] * 0.86) gear--;
+      if (gear !== this.gear) {
+        this.shifted = gear > this.gear ? 1 : -1;
+        this.shiftTimer = gear > this.gear ? 0.3 : 0.2;
+        this.gear = gear;
+      }
+      if (this.shiftTimer > 0) this.shiftTimer -= dt;
+      const lo = ratios[gear - 1], hi = Math.min(ratios[gear], spec.top * 1.2);
+      const tr = clamp((av - lo) / Math.max(0.01, hi - lo), 0, 1);
+      // Map gear progress into idle→redline: launch sits higher, cruise sits mid-band
+      const targetRpm = this.grounded ? 0.18 + tr * 0.78 : 0.95 * (inp.throttle || 0.4);
+      const shifting = this.shiftTimer > 0;
+      const lam = shifting ? (this.shifted > 0 ? 4.5 : 16) : (targetRpm > this.rpm ? 11 : 6);
+      this.rpm = damp(this.rpm, Math.max(targetRpm, inp.throttle > 0 && sp < 3 ? 0.55 : 0.18), lam, dt);
     }
-    if (this.shiftTimer > 0) this.shiftTimer -= dt;
-    const lo = ratios[gear - 1], hi = Math.min(ratios[gear], spec.top * 1.2);
-    const tr = clamp((av - lo) / (hi - lo), 0, 1);
-    const targetRpm = this.grounded ? 0.25 + tr * 0.72 : 0.95 * (inp.throttle || 0.4);
-    const shifting = this.shiftTimer > 0;
-    // on throttle the revs fall slowly during an upshift and snap up on a downshift blip
-    const lam = shifting ? (this.shifted > 0 ? 4.5 : 16) : (targetRpm > this.rpm ? 11 : 6);
-    this.rpm = damp(this.rpm, Math.max(targetRpm, inp.throttle > 0 && sp < 3 ? 0.55 : 0.18), lam, dt);
   }
 
   collideStatic() {
@@ -301,19 +349,24 @@ export class Car {
         const tx = -nz, tz = nx;
         const vt = this.vel.x * tx + this.vel.y * tz;
         const impact = -vn;
-        const e = 0.25;
+        // Arcade recovery: low bounce, keep most forward speed on scrapes so walls don't kill the run
+        const player = this.role === 'player';
+        const graze = Math.abs(vt) > impact * 1.1;
+        const e = player ? (graze ? 0.04 : 0.1) : 0.25;
+        const scrub = player ? (graze ? 0.04 : Math.min(0.28, impact * 0.006)) : Math.min(0.5, impact * 0.012);
         const newVn = -vn * e;
-        const newVt = vt * (1 - Math.min(0.5, impact * 0.012));
+        const newVt = vt * (1 - scrub);
         this.vel.set(nx * newVn + tx * newVt, nz * newVn + tz * newVt);
-        // yaw kick
+        // yaw kick (softer for player scrapes)
         const cross = fx * nz - fz * nx;
-        this.angVel += cross * s * impact * 0.04;
-        if (impact > 3) this.game.onImpact(this, null, impact, cx - nx * this.radius, cz - nz * this.radius, r.tag);
+        this.angVel += cross * s * impact * (player && graze ? 0.015 : 0.04);
+        if (impact > (player ? 2.2 : 3)) this.game.onImpact(this, null, impact, cx - nx * this.radius, cz - nz * this.radius, r.tag);
       }
     }
   }
 
-  syncVisual(dt, time = 0) {
+  // detail: 2 = player (full), 1 = near AI, 0 = far (pose + wheels only)
+  syncVisual(dt, time = 0, detail = 2) {
     const m = this.model;
     const world = this.game.world;
     m.root.position.copy(this.pos);
@@ -329,9 +382,9 @@ export class Car {
     const targetRoll = Math.asin(clamp(n.x * -fz + n.z * fx, -1, 1));
     this.pitch = dt ? damp(this.pitch, targetPitch, 10, dt) : targetPitch;
     this.roll = dt ? damp(this.roll, targetRoll, 10, dt) : targetRoll;
-    // sample the real surface under all four wheels -> pitch/roll/ride-height that follow the road, no wheel clipping
     let lift = 0;
-    if (this.grounded) {
+    if (detail >= 1 && this.grounded) {
+      // sample the real surface under all four wheels -> pitch/roll/ride-height that follow the road, no wheel clipping
       const wbh = this.dims.wb, hwt = this.dims.W / 2 - 0.2, cy = Math.cos(this.yaw), sy = Math.sin(this.yaw);
       const hs = (lz, lx) => world.heightAt(this.pos.x + sy * lz + cy * lx, this.pos.z + cy * lz - sy * lx);
       const hFL = hs(wbh, -hwt), hFR = hs(wbh, hwt), hRL = hs(-wbh, -hwt), hRR = hs(-wbh, hwt);
@@ -343,6 +396,8 @@ export class Car {
       const tl = Math.max(-0.02, avg - (this.pos.y - RIDE));
       this.vLift = dt ? damp(this.vLift ?? tl, tl, 18, dt) : tl;
       lift = this.vLift;
+    } else if (detail < 1) {
+      this.vPitch = this.pitch; this.vRoll = this.roll; this.vLift = 0;
     } else { this.vPitch = this.pitch; this.vRoll = this.roll; this.vLift = 0; }
     m.root.position.y = this.pos.y + lift;
     m.root.rotation.set(0, 0, 0);
@@ -350,25 +405,23 @@ export class Car {
     m.root.rotation.y = this.yaw;
     m.root.rotation.x = this.grounded ? -this.vPitch : this.pitch;
     m.root.rotation.z = this.grounded ? this.vRoll : this.roll;
-    // body motion: real spring-damper on pitch / roll / heave. Squats on throttle, dives on brakes, rolls in corners,
-    // rebounds after bumps and landings, and shudders with the engine - so the car reads as a heavy object on springs.
     const S = this.susp, sdt = Math.min(dt || 0, 0.033);
-    if (sdt > 0) {
+    if (detail >= 1 && sdt > 0) {
+      // body motion: spring-damper on pitch / roll / heave
       const cgk = this.cgH / 0.5;
       const tp = clamp(-this.accelLong * 0.0046 * cgk, -0.08, 0.08);
       const tr = clamp(this.accelLat * 0.0042 * cgk, -0.1, 0.1);
       const rough = (this.offroad ? 1 : 0.18) * clamp(this.speed / 40, 0, 1);
-      const sub = 2, h = sdt / sub;
+      const sub = detail >= 2 ? 2 : 1, h = sdt / sub;
       for (let i = 0; i < sub; i++) {
         S.pv += ((tp - S.p) * 110 - S.pv * 11) * h; S.p += S.pv * h;
         S.rv += ((tr - S.r) * 120 - S.rv * 11.5) * h; S.r += S.rv * h;
         S.hv += ((0 - S.h) * 140 - S.hv * 13) * h; S.h += S.hv * h;
       }
-      // road texture + engine vibration
       const t = time * 1;
       S.hv += (Math.sin(t * 61 + this.sirenPhase) * 0.5 + Math.sin(t * 97)) * 0.012 * rough;
       S.pv += Math.sin(t * 43 + 1.7) * 0.004 * rough;
-      if (this.role === 'player' && this.grounded) S.h += Math.sin(t * (30 + this.rpm * 70)) * 0.0011 * (0.35 + this.rpm);
+      if (detail >= 2 && this.role === 'player' && this.grounded) S.h += Math.sin(t * (30 + this.rpm * 70)) * 0.0011 * (0.35 + this.rpm);
       S.p = clamp(S.p, -0.10, 0.10); S.r = clamp(S.r, -0.14, 0.14); S.h = clamp(S.h, -0.05, 0.12);
     }
     this.bodyPitch = S.p; this.bodyRoll = S.r;
@@ -377,16 +430,23 @@ export class Car {
     m.body.position.y = S.h;
     if (this.blob) { this.blob.material.opacity = this.grounded ? 0.8 : clamp(0.8 - this.airTime * 1.2, 0.15, 0.8); this.blob.visible = this.visible; }
     // wheels
-    const blurA = clamp((Math.abs(this.vF) - 10) / 32, 0, 0.62);
+    const blurA = detail >= 1 ? clamp((Math.abs(this.vF) - 10) / 32, 0, 0.62) : 0;
     for (const w of m.wheels) {
       if (w.blur) { w.blur.material.opacity = blurA; w.blur.visible = blurA > 0.02; }
       w.spin.rotation.x = this.wheelSpin;
       if (w.front) w.pivot.rotation.y = this.steerAngle * 1.2;
     }
-    if (this.interior) this.interior.wheel.rotation.z = -(this.steerWheel || 0) * 1.5;
-    // brake lights
+    if (detail >= 2 && this.interior) this.interior.wheel.rotation.z = -(this.steerWheel || 0) * 1.5;
+    // brake lights — emissive + flare bloom punch
     const braking = this.input.brake > 0.1 && this.vF > 1;
-    m.tailMat.emissiveIntensity = braking ? 6 : 1.4;
+    m.tailMat.emissiveIntensity = braking ? 9 : 1.7;
+    if (detail >= 1) for (const h of m.heads) {
+      if (h.userData.lamp !== 'tail') continue;
+      const k = braking ? (h.userData.layer === 'core' ? 1.55 : 1.85) : 1;
+      const s = (h.userData.baseScale || 1) * k;
+      h.scale.set(s, s, 1);
+      h.material.opacity = Math.min(1, (h.userData.baseOpacity || 0.7) * (braking ? 1.35 : 1));
+    }
     // siren
     if (this.police && m.siren.rMat) {
       const on = this.sirenOn !== false && !this.wrecked;
@@ -400,8 +460,8 @@ export class Car {
       m.siren.rs2.visible = flashB; m.siren.bs2.visible = flashA;
       this.flashA = flashA; this.flashB = flashB;
     }
-    m.paint.userData.u.uDmg.value = clamp((1 - this.health) * 0.9, 0, 0.9);
-    if (m.dmgMats && m.dmgMats.length) { const k = 1 - clamp((1 - this.health) * 0.9, 0, 0.9) * 0.6; for (const dm of m.dmgMats) dm.color.setScalar(k); }
+    if (m.paint.userData.u) m.paint.userData.u.uDmg.value = clamp((1 - this.health) * 0.9, 0, 0.9);
+    if (detail >= 1 && m.dmgMats && m.dmgMats.length) { const k = 1 - clamp((1 - this.health) * 0.9, 0, 0.9) * 0.6; for (const dm of m.dmgMats) dm.color.setScalar(k); }
   }
 
   dispose() {

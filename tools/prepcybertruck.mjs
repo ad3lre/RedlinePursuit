@@ -31,9 +31,13 @@ function subset(prim, keepTri) {
   return np;
 }
 const simplify = (prim, ratio, minTris = 400) => {
+  if (ratio >= 1) return;
   const idxA = prim.getIndices(), posA = prim.getAttribute('POSITION'); if (!idxA || idxA.getCount() / 3 < minTris) return;
   const idx = idxA.getArray(), pos = posA.getArray(); const target = Math.max(250, Math.floor(idx.length * ratio / 3)) * 3;
-  const [si] = MeshoptSimplifier.simplifySloppy(new Uint32Array(idx), pos, 3, null, target, 0.05);
+  let si;
+  try { [si] = MeshoptSimplifier.simplifySloppy(new Uint32Array(idx), pos, 3, null, target, 0.05); }
+  catch { return; }
+  if (!si || si.length < 3) return;
   const used = new Map(), ni = new Uint32Array(si.length), keep = [];
   for (let i = 0; i < si.length; i++) { let u = used.get(si[i]); if (u === undefined) { u = keep.length; used.set(si[i], u); keep.push(si[i]); } ni[i] = u; }
   for (const sem of prim.listSemantics()) { const a = prim.getAttribute(sem), sz = a.getElementSize(), src = a.getArray(); const dst = new src.constructor(keep.length * sz); keep.forEach((v, j) => { for (let c = 0; c < sz; c++) dst[j * sz + c] = src[v * sz + c]; }); prim.setAttribute(sem, doc.createAccessor().setType(a.getType()).setArray(dst).setBuffer(buffer).setNormalized(a.getNormalized())); }
@@ -51,12 +55,22 @@ for (const n of meshNodes) {
   }
   n.setMesh(null); scene.removeChild(n); n.dispose();
 }
-// 3. interior (cockpit seats/dash/yoke): hi keeps 35%, lo drops it
+// 3. interior (cockpit seats/dash/yoke): drop on both lods (cockpit is a separate build)
 for (const n of root.listNodes()) {
   if (!n.getMesh() || !/^Cube.003_In_0$/.test(n.getName())) continue;
-  if (LO) { n.setMesh(null); scene.removeChild(n); n.dispose(); } else for (const p of n.getMesh().listPrimitives()) simplify(p, 0.35);
+  n.setMesh(null); scene.removeChild(n); n.dispose();
+}
+// 4. body / glass / remaining detail
+for (const n of root.listNodes()) {
+  if (!n.getMesh() || /^wheel_/.test(n.getName())) continue;
+  const r = LO ? 0.35 : 0.55;
+  for (const p of n.getMesh().listPrimitives()) {
+    const mn = p.getMaterial()?.getName() || '';
+    if (/glass/i.test(mn)) continue;
+    simplify(p, /tire|wheel/i.test(mn) ? (LO ? 0.08 : 0.2) : r, 200);
+  }
 }
 const count = () => { let t = 0; for (const m of root.listMeshes()) for (const p of m.listPrimitives()) t += tris(p); return Math.round(t); };
 console.log(variant, 'tris', count(), 'nodes', root.listNodes().filter((n) => n.getMesh()).length);
-await doc.transform(textureCompress({ encoder: sharp, targetFormat: 'webp', resize: [LO ? 512 : 2048, LO ? 512 : 2048], quality: 82 }), prune(), dedup(), reorder({ encoder: MeshoptEncoder }), meshopt({ encoder: MeshoptEncoder, level: 'medium' }));
+await doc.transform(textureCompress({ encoder: sharp, targetFormat: 'webp', resize: [LO ? 512 : 1024, LO ? 512 : 1024], quality: 82 }), prune(), dedup(), reorder({ encoder: MeshoptEncoder }), meshopt({ encoder: MeshoptEncoder, level: 'medium' }));
 await io.write(out, doc); console.log('wrote', out);

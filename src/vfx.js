@@ -38,6 +38,7 @@ class ParticlePool {
     this.parts = [];
     for (let i = 0; i < max; i++) this.parts.push({ life: 0, max: 1, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, s0: 1, s1: 1, a0: 1, r: 1, g: 1, b: 1, rot: 0, vr: 0, drag: 1, grav: 0 });
     this.cursor = 0;
+    this._uploadTo = 0; // high-water mark of slots that need GPU upload
   }
   emit(o) {
     const p = this.parts[this.cursor]; this.cursor = (this.cursor + 1) % this.max;
@@ -47,9 +48,11 @@ class ParticlePool {
   }
   update(dt) {
     const P = this.parts;
+    let hi = 0;
     for (let i = 0; i < this.max; i++) {
       const p = P[i];
       if (p.life <= 0) { this.alpha[i] = 0; this.size[i] = 0; continue; }
+      hi = i + 1;
       p.life -= dt;
       const k = Math.exp(-p.drag * dt);
       p.vx *= k; p.vy = p.vy * k - p.grav * dt; p.vz *= k;
@@ -63,7 +66,14 @@ class ParticlePool {
       this.col[i * 3] = p.r; this.col[i * 3 + 1] = p.g; this.col[i * 3 + 2] = p.b;
       this.rot[i] = p.rot;
     }
-    for (const k of ['position', 'pcolor', 'size', 'alpha', 'rot']) this.geo.attributes[k].needsUpdate = true;
+    // Upload only through the previous high-water mark so dead slots that just expired still clear on GPU
+    const n = Math.max(hi, this._uploadTo);
+    this._uploadTo = hi;
+    if (n <= 0) return;
+    const attrs = this.geo.attributes;
+    for (const [k, stride] of [['position', 3], ['pcolor', 3], ['size', 1], ['alpha', 1], ['rot', 1]]) {
+      const a = attrs[k]; a.needsUpdate = true; a.updateRange.offset = 0; a.updateRange.count = n * stride;
+    }
   }
 }
 
@@ -102,10 +112,16 @@ class SkidMarks {
     P[o + 6] = x - rx * w; P[o + 7] = y; P[o + 8] = z - rz * w;
     P[o + 9] = x + rx * w; P[o + 10] = y; P[o + 11] = z + rz * w;
     this.alpha.fill(a, i * 4, i * 4 + 4);
-    this.mesh.geometry.attributes.position.needsUpdate = true;
-    this.mesh.geometry.attributes.alpha.needsUpdate = true;
+    const gp = this.mesh.geometry.attributes.position, ga = this.mesh.geometry.attributes.alpha;
+    gp.needsUpdate = true; gp.updateRange.offset = i * 12; gp.updateRange.count = 12;
+    ga.needsUpdate = true; ga.updateRange.offset = i * 4; ga.updateRange.count = 4;
   }
-  clear() { this.pos.fill(0); this.alpha.fill(0); this.mesh.geometry.attributes.position.needsUpdate = true; }
+  clear() {
+    this.pos.fill(0); this.alpha.fill(0);
+    const gp = this.mesh.geometry.attributes.position, ga = this.mesh.geometry.attributes.alpha;
+    gp.needsUpdate = true; gp.updateRange.offset = 0; gp.updateRange.count = -1;
+    ga.needsUpdate = true; ga.updateRange.offset = 0; ga.updateRange.count = -1;
+  }
 }
 
 export class VFX {

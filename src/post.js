@@ -36,8 +36,9 @@ const MotionBlurShader = {
       float l = length(vel); if (l > uMax) vel *= uMax / l;
       if (l < 0.0006) { gl_FragColor = base; return; }
       vec3 acc = vec3(0.0); float jit = ign(gl_FragCoord.xy) - 0.5;
-      for (int i = 0; i < 12; i++) { float t = (float(i) + 0.5 + jit) / 12.0 - 0.5; acc += texture2D(tDiffuse, clamp(vUv + vel * t, 0.001, 0.999)).rgb; }
-      vec3 outc = acc / 12.0; if (!(outc.r == outc.r) || !(outc.g == outc.g) || !(outc.b == outc.b)) outc = base.rgb;
+      // 6 taps (was 12): same look at half the bandwidth
+      for (int i = 0; i < 6; i++) { float t = (float(i) + 0.5 + jit) / 6.0 - 0.5; acc += texture2D(tDiffuse, clamp(vUv + vel * t, 0.001, 0.999)).rgb; }
+      vec3 outc = acc / 6.0; if (!(outc.r == outc.r) || !(outc.g == outc.g) || !(outc.b == outc.b)) outc = base.rgb;
       gl_FragColor = vec4(outc, base.a);
     }`,
 };
@@ -65,11 +66,12 @@ class MotionBlurPass extends Pass {
 const FinalShader = {
   uniforms: {
     tDiffuse: { value: null }, uSpeed: { value: 0 }, uBlur: { value: 1 }, uTime: { value: 0 },
-    uDamage: { value: 0 }, uNitro: { value: 0 }, uMB: { value: 0 }, uVig: { value: 1 }, uRes: { value: new THREE.Vector2(1, 1) }, uSiren: { value: new THREE.Vector3() }, uSun: { value: new THREE.Vector3(0.5, 0.5, 0) },
+    uDamage: { value: 0 }, uNitro: { value: 0 }, uMB: { value: 0 }, uVig: { value: 1 }, uRes: { value: new THREE.Vector2(1, 1) }, uSiren: { value: new THREE.Vector3() }, uSun: { value: new THREE.Vector3(0.5, 0.5, 0) }, uNight: { value: 0 },
+    uFx: { value: 2 }, // 0 = grade only, 1 = speed+CA no shafts, 2 = full
   },
   vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
   fragmentShader: `
-    uniform sampler2D tDiffuse; uniform float uSpeed, uBlur, uTime, uDamage, uNitro, uVig, uMB; uniform vec2 uRes; uniform vec3 uSiren, uSun;
+    uniform sampler2D tDiffuse; uniform float uSpeed, uBlur, uTime, uDamage, uNitro, uVig, uMB, uNight, uFx; uniform vec2 uRes; uniform vec3 uSiren, uSun;
     varying vec2 vUv;
     float h(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
     void main(){
@@ -77,18 +79,20 @@ const FinalShader = {
       vec2 d = vUv - c;
       float r = length(d);
       float mask = smoothstep(0.18, 0.75, r);
-      float amt = uSpeed * uBlur + uNitro * 0.45 * uBlur; // nitro adds its own radial rush even at moderate speed
+      float amt = uFx < 0.5 ? 0.0 : (uSpeed * uBlur + uNitro * 0.45 * uBlur);
       vec3 col = vec3(0.0);
       if (amt > 0.01) {
         float st = (0.028 - 0.016 * uMB) * amt * mask;
         float tot = 0.0;
-        for (int i = 0; i < 8; i++) { float f = float(i) / 7.0; float w = 1.0 - f * 0.6; col += texture2D(tDiffuse, vUv - d * st * f).rgb * w; tot += w; }
+        for (int i = 0; i < 5; i++) { float f = float(i) / 4.0; float w = 1.0 - f * 0.6; col += texture2D(tDiffuse, vUv - d * st * f).rgb * w; tot += w; }
         col /= tot;
       } else col = texture2D(tDiffuse, vUv).rgb;
       // chromatic aberration toward edges
-      float ca = (0.0012 + 0.0035 * amt) * mask;
-      col.r = mix(col.r, texture2D(tDiffuse, vUv + d * ca * 2.0).r, 0.7);
-      col.b = mix(col.b, texture2D(tDiffuse, vUv - d * ca * 2.0).b, 0.7);
+      if (uFx > 0.5) {
+        float ca = (0.0012 + 0.0035 * amt) * mask;
+        col.r = mix(col.r, texture2D(tDiffuse, vUv + d * ca * 2.0).r, 0.7);
+        col.b = mix(col.b, texture2D(tDiffuse, vUv - d * ca * 2.0).b, 0.7);
+      }
       // speed streaks
       if (amt > 0.05) {
         float ang = atan(d.y, d.x);
@@ -97,29 +101,34 @@ const FinalShader = {
         float along = fract(r * 3.0 - uTime * 4.0 + h(vec2(lane, 1.0)));
         col += mix(vec3(0.7, 0.8, 1.0), vec3(0.35, 0.65, 1.0), uNitro) * s * smoothstep(0.35, 0.9, r) * smoothstep(0.0, 0.3, along) * (1.0 - along) * amt * 0.5;
       }
-      // sun shafts: march from the pixel toward the sun, keep only HDR-bright samples (sun disc / sky glow); hills and buildings occlude naturally
-      if (uSun.z > 0.01) {
+      // sun shafts (High only via uFx) — 6 taps (was 10)
+      if (uFx > 1.5 && uSun.z > 0.01) {
         vec2 sd = (uSun.xy - vUv) * 0.55; float jt = h(gl_FragCoord.xy) * 0.5; vec3 acc = vec3(0.0);
-        for (int i = 0; i < 10; i++) { float t = (float(i) + jt) / 10.0; vec3 sm = texture2D(tDiffuse, vUv + sd * t).rgb; acc += max(sm - vec3(1.1), 0.0) * (1.0 - t); }
+        for (int i = 0; i < 6; i++) { float t = (float(i) + jt) / 6.0; vec3 sm = texture2D(tDiffuse, vUv + sd * t).rgb; acc += max(sm - vec3(1.1), 0.0) * (1.0 - t); }
         float fall = 1.0 - smoothstep(0.0, 1.2, length(vUv - uSun.xy));
-        col += min(acc * 0.1, vec3(1.5)) * vec3(1.0, 0.72, 0.45) * uSun.z * (0.35 + 0.65 * fall);
+        vec3 shaftTint = mix(vec3(1.0, 0.72, 0.45), vec3(0.55, 0.75, 1.15), uNight);
+        col += min(acc * 0.14, vec3(1.5)) * shaftTint * uSun.z * (0.35 + 0.65 * fall) * mix(1.0, 0.55, uNight);
       }
       // grading: slight saturation + contrast in linear
       float l = dot(col, vec3(0.2126, 0.7152, 0.0722));
-      col = mix(vec3(l), col, 1.14);
-      // filmic split-tone: cool shadows, warm highlights, gentle toe contrast
-      col *= mix(vec3(0.97, 1.0, 1.05), vec3(1.05, 1.0, 0.93), smoothstep(0.05, 1.4, l));
-      col = col * (1.0 + 0.10 * smoothstep(0.0, 0.6, l)) - 0.004;
+      col = mix(vec3(l), col, mix(1.14, 1.22, uNight));
+      // filmic split-tone: day = warm highlights; night = cool shadows + magenta/cyan neon lift
+      vec3 shadowT = mix(vec3(0.97, 1.0, 1.05), vec3(0.88, 0.94, 1.18), uNight);
+      vec3 highT = mix(vec3(1.05, 1.0, 0.93), vec3(1.08, 0.98, 1.05), uNight);
+      col *= mix(shadowT, highT, smoothstep(0.05, 1.4, l));
+      col = col * (1.0 + mix(0.10, 0.16, uNight) * smoothstep(0.0, 0.6, l)) - mix(0.004, 0.01, uNight);
+      // soft night lift on deep blacks so neon bloom doesn't crush into void
+      col += vec3(0.008, 0.01, 0.022) * uNight * (1.0 - smoothstep(0.0, 0.35, l));
       // vignette
-      float vig = 1.0 - smoothstep(0.45, 1.05, r * 1.25) * 0.55 * uVig;
+      float vig = 1.0 - smoothstep(0.45, 1.05, r * 1.25) * mix(0.55, 0.68, uNight) * uVig;
       col *= vig;
       // damage & nitro & siren edge glow
       float edge = smoothstep(0.35, 0.85, r);
       col = mix(col, col * vec3(1.6, 0.3, 0.3) + vec3(0.25, 0.0, 0.0), edge * uDamage);
       col += vec3(0.1, 0.3, 1.0) * edge * uNitro * (0.5 + 0.1 * sin(uTime * 38.0)) + vec3(0.25, 0.5, 1.0) * smoothstep(0.55, 1.0, r) * uNitro * 0.35;
       col += vec3(uSiren.x, 0.0, uSiren.y) * edge * 0.25 * uSiren.z;
-      // grain
-      col += (h(vUv * uRes + fract(uTime * 7.0) * 311.0) - 0.5) * 0.015;
+      // grain (skip on Low — pure bandwidth noise)
+      if (uFx > 0.5) col += (h(vUv * uRes + fract(uTime * 7.0) * 311.0) - 0.5) * 0.015;
       gl_FragColor = vec4(max(col, 0.0), 1.0);
     }`,
 };
@@ -134,7 +143,7 @@ export class Post {
     this.composer = new EffectComposer(renderer, rt);
     this.render = new RenderPass(scene, camera);
     this.composer.addPass(this.render);
-    this.bloom = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), 0.5, 0.5, 1.0);
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), 0.55, 0.55, 0.92);
     this.composer.addPass(this.bloom);
     this.mb = new MotionBlurPass(camera); this.mb.strength = 0;
     this.composer.addPass(this.mb);
@@ -142,8 +151,14 @@ export class Post {
     this.composer.addPass(this.final);
     this.composer.addPass(new OutputPass());
     this.u = this.final.uniforms;
+    this.q = 2;
   }
   setSize(w, h) { this.composer.setSize(w, h); this.u.uRes.value.set(w, h); }
-  setQuality(q) { this.bloom.enabled = q > 0; this.mb.enabled = q > 0; }
+  setQuality(q) {
+    this.q = q;
+    this.bloom.enabled = q > 0;
+    this.mb.enabled = q > 1; // motion blur only on High
+    this.u.uFx.value = q; // 0/1/2 gates FinalShader cost
+  }
   draw(dt) { this.u.uTime.value += dt; this.composer.render(dt); }
 }

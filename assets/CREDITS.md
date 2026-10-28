@@ -26,6 +26,18 @@
 - Changes: world transforms baked, wheels regrouped into four spinning/steering nodes, geometry decimated (730k -> ~190k hi / ~81k lo triangles), duplicate materials merged, textures resized (1024 / 512 px WebP), meshopt-compressed. Source (not committed): `assets/source/gt3rs_src.glb`; pipeline: `node tools/prepgt3.mjs assets/source/gt3rs_src.glb assets/models/gt3rs_hi.glb hi` (and `... _lo.glb lo`).
 - **Porsche, 911 and GT3 RS are trademarks of Dr. Ing. h.c. F. Porsche AG; verify trademark situation before any public/commercial release** (same caveat as the Ferrari and the Cybertruck).
 
+## Mercedes Vito Utility Car (`assets/models/vito_hi.glb` / `vito_lo.glb`)
+- "Mercedes Vito Utility Car" by **solid3DDD** on Sketchfab: https://sketchfab.com/3d-models/mercedes-vito-utility-car-fe704a2aa87a4921990d4973a6eef36d
+- Licensed under **Creative Commons Attribution (CC BY)**: https://creativecommons.org/licenses/by/4.0/ . Commercial use allowed with credit.
+- Changes: scaled to 5.14 m (Vito Long), nose kept +Z, wheels regrouped into four spinning/steering nodes (source L/R names were mirrored), geometry decimated, textures resized (1024 / 512 px WebP), meshopt-compressed. Source (not committed): `assets/source/vito_src.glb`; pipeline: `node tools/prepvito.mjs assets/source/vito_src.glb assets/models/vito_hi.glb hi` (and `... _lo.glb lo`).
+- **Mercedes-Benz / Vito are trademarks of Mercedes-Benz Group AG; verify trademark situation before any public/commercial release** (same caveat as the Ferrari / Cybertruck / GT3 RS).
+
+## Mini Cooper S (`assets/models/mini_hi.glb` / `mini_lo.glb`)
+- "Mini Cooper S" by **シRuletăシ** (@romanian_guy_0069) on Sketchfab: https://sketchfab.com/3d-models/mini-cooper-s-7d407f7a1db44fefb206d17e12680576
+- Licensed under **Creative Commons Attribution (CC BY)**: https://creativecommons.org/licenses/by/4.0/ . Commercial use allowed with credit.
+- Changes: scaled to 3.85 m, nose kept +Z, SketchUp wheel groups regrouped into four spinning nodes, geometry joined/decimated, textures resized (1024 / 512 px WebP), meshopt-compressed. Source (not committed): `assets/source/mini_src.glb`; pipeline: `node tools/prepmini.mjs assets/source/mini_src.glb assets/models/mini_hi.glb hi` (and `... _lo.glb lo`).
+- **MINI / Cooper are trademarks of BMW AG; verify trademark situation before any public/commercial release** (same caveat as the other branded cars).
+
 ## Generic passenger car pack (traffic + rival cars: sedan, wagon, hatchback, compact, coupe, minivan, SUV, offroad, pickup, sport)
 - "Generic passenger car pack" by **Comrade1280** on Sketchfab: https://sketchfab.com/3d-models/generic-passenger-car-pack-20f9af9b8a404d5cb022ac6fe87f21f5
 - Licensed under **Creative Commons Attribution 4.0 (CC BY 4.0)**: https://creativecommons.org/licenses/by/4.0/ . Commercial use allowed with credit.

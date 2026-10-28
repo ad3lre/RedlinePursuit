@@ -12,6 +12,10 @@ export function loopRadius(t, mapId = currentMap) {
     const eastFlat = Math.max(0, Math.cos(t));
     return 1290 - 150 * eastFlat * eastFlat + 140 * Math.cos(2 * t) + 75 * Math.sin(3 * t - 0.4) + 42 * Math.sin(6 * t + 0.9) * (1 - 0.7 * eastFlat);
   }
+  if (mapId === 'stuttgart') {
+    // Autobahn ring around the Kessel: slightly squashed N–S, flowing bends into the western vineyard hills.
+    return 1280 + 95 * Math.cos(2 * t) + 70 * Math.sin(3 * t + 0.6) + 38 * Math.sin(5 * t - 0.3) + 28 * Math.cos(7 * t + 1.1);
+  }
   return 1320 + 110 * Math.sin(3 * t + 0.5) + 50 * Math.sin(7 * t + 1.3) + 22 * Math.sin(11 * t + 2.1);
 }
 function loopPoint(t, mapId = currentMap) {
@@ -133,6 +137,7 @@ function driveableProfile(pts, maxGrade, pin = 1, closed = false) {
 
 export function buildRoads(mapId = currentMap) {
   const isTokyo = mapId === 'tokyo';
+  const isStuttgart = mapId === 'stuttgart';
   const roads = [];
   // ---- Highway loop ----
   const dense = [];
@@ -149,7 +154,8 @@ export function buildRoads(mapId = currentMap) {
     const minH = isTokyo && p.x > 480 ? lerp(5, 15, sstep(480, 780, p.x)) : 3.5;
     p.h = Math.max(p.h, minH);
   }
-  const loop = { name: isTokyo ? 'WANGAN EXPRESSWAY' : 'COAST HIGHWAY', pts: loopPts, halfW: LOOP_HALF_W, closed: true, kind: 'highway' };
+  const loopName = isTokyo ? 'WANGAN EXPRESSWAY' : isStuttgart ? 'STUTTGARTER RING' : 'COAST HIGHWAY';
+  const loop = { name: loopName, pts: loopPts, halfW: LOOP_HALF_W, closed: true, kind: 'highway' };
   roads.push(loop);
 
   const loopIndexAtAngle = (ang) => {
@@ -167,6 +173,13 @@ export function buildRoads(mapId = currentMap) {
     { tag: 'west', name: 'HAKONE TOUGE', jp: '箱根峠', s: { x: -CITY_HALF, z: 0 }, dir: { x: -1, z: 0 }, ang: Math.PI, wig: -115, freq: 3 },
     { tag: 'nw', name: 'HARUNA PASS', jp: '榛名山', s: { x: -CITY_HALF, z: -CITY_HALF }, dir: { x: -0.7071, z: -0.7071 }, ang: -Math.PI * 0.75, wig: 120, freq: 3 },
     { tag: 'se', name: 'ODAIBA BAYWAY', jp: 'お台場湾岸', s: { x: CITY_HALF, z: CITY_HALF }, dir: { x: 0.7071, z: 0.7071 }, ang: Math.PI * 0.25, wig: 45, freq: 1 },
+  ] : isStuttgart ? [
+    { tag: 'north', name: 'HEILBRONNER STR.', jp: 'Heilbronn', s: { x: 0, z: -CITY_HALF }, dir: { x: 0, z: -1 }, ang: -Math.PI / 2, wig: 55, freq: 1 },
+    { tag: 'south', name: 'TÜBINGER STR.', jp: 'Tübingen', s: { x: 0, z: CITY_HALF }, dir: { x: 0, z: 1 }, ang: Math.PI / 2, wig: -65, freq: 1 },
+    { tag: 'east', name: 'NECKARTAL', jp: 'Neckar', s: { x: CITY_HALF, z: 0 }, dir: { x: 1, z: 0 }, ang: 0, wig: 40, freq: 1 },
+    { tag: 'west', name: 'WEINBERGE', jp: 'Weinberge', s: { x: -CITY_HALF, z: 0 }, dir: { x: -1, z: 0 }, ang: Math.PI, wig: -95, freq: 2 },
+    { tag: 'nw', name: 'SOLITUDE', jp: 'Solitude', s: { x: -CITY_HALF, z: -CITY_HALF }, dir: { x: -0.7071, z: -0.7071 }, ang: -Math.PI * 0.75, wig: 105, freq: 3 },
+    { tag: 'se', name: 'FLUGHAFEN', jp: 'Flughafen', s: { x: CITY_HALF, z: CITY_HALF }, dir: { x: 0.7071, z: 0.7071 }, ang: Math.PI * 0.25, wig: 55, freq: 1 },
   ] : [
     { tag: 'north', name: 'NORTH AVE', s: { x: 0, z: -CITY_HALF }, dir: { x: 0, z: -1 }, ang: -Math.PI / 2, wig: 60, freq: 1 },
     { tag: 'south', name: 'SOUTH AVE', s: { x: 0, z: CITY_HALF }, dir: { x: 0, z: 1 }, ang: Math.PI / 2, wig: -70, freq: 1 },
@@ -400,8 +413,9 @@ export function buildNav(net) {
 // Build a route polyline from a list of nav node ids (waypoints)
 export function buildRoute(nav, wps) {
   let ids = [];
-  for (let i = 0; i < wps.length - 1; i++) {
-    const p = nav.astar(wps[i], wps[i + 1]);
+  const clean = wps.filter((id) => id != null && nav.nodes[id]);
+  for (let i = 0; i < clean.length - 1; i++) {
+    const p = nav.astar(clean[i], clean[i + 1]);
     if (!p) continue;
     if (ids.length) p.shift();
     ids.push(...p);
@@ -409,6 +423,7 @@ export function buildRoute(nav, wps) {
   // remove A-B-A reversals left over at leg joins
   for (let i = 2; i < ids.length; i++) if (ids[i] === ids[i - 2]) { ids.splice(i - 1, 2); i = Math.max(1, i - 2); }
   const pts = ids.map((id) => ({ x: nav.nodes[id].x, z: nav.nodes[id].z }));
+  if (!pts.length) return { pts: [{ x: 0, z: 0, d: 0 }], length: 0, ids: [] };
   const out = pts;
   let d = 0;
   out[0].d = 0;

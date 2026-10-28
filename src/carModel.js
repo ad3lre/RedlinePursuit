@@ -1,6 +1,6 @@
 // ===== Procedural car models =====
 import * as THREE from 'three';
-import { glowTexture, textTexture } from './textures.js';
+import { glowTexture, softGlowTexture, textTexture } from './textures.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { hasGLB, getTemplate } from './carAssets.js';
 
@@ -26,15 +26,18 @@ const shared = {};
 function S() {
   if (shared.ready) return shared;
   shared.glass = new THREE.MeshPhysicalMaterial({ color: 0x0a0e14, metalness: 0.2, roughness: 0.05, clearcoat: 1, envMapIntensity: 1.6 });
+  shared.glassCheap = new THREE.MeshStandardMaterial({ color: 0x0a0e14, metalness: 0.25, roughness: 0.12, envMapIntensity: 1.2 });
   shared.tire = new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.92 });
   shared.rim = new THREE.MeshStandardMaterial({ color: 0xc8ccd0, metalness: 1, roughness: 0.22 });
   shared.darkRim = new THREE.MeshStandardMaterial({ color: 0x222428, metalness: 0.9, roughness: 0.3 });
   shared.black = new THREE.MeshStandardMaterial({ color: 0x0c0c0e, roughness: 0.6, metalness: 0.3 });
   shared.chrome = new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 1, roughness: 0.1 });
-  shared.head = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xfff4e0, emissiveIntensity: 3.5 });
-  shared.glowW = glowTexture('rgba(255,250,235,1)', 'rgba(255,240,220,0)', 128);
-  shared.glowR = glowTexture('rgba(255,40,30,1)', 'rgba(255,0,0,0)', 128);
-  shared.glowB = glowTexture('rgba(40,90,255,1)', 'rgba(0,40,255,0)', 128);
+  shared.head = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xfff4e0, emissiveIntensity: 5.5 });
+  shared.glowW = softGlowTexture(255, 248, 230, 256);
+  shared.glowR = softGlowTexture(255, 36, 28, 256);
+  shared.glowB = softGlowTexture(48, 110, 255, 256);
+  shared.glowWCore = glowTexture('rgba(255,252,245,1)', 'rgba(255,240,210,0)', 128);
+  shared.glowRCore = glowTexture('rgba(255,70,55,1)', 'rgba(255,20,10,0)', 128);
   shared.policeTex = textTexture('POLICE', { bg: 'rgba(0,0,0,0)', fg: '#0a0a0a', font: 'bold 90px Arial Black, Arial', border: false });
   shared.interior = new THREE.MeshStandardMaterial({ color: 0x1a1b1e, roughness: 0.8 });
   shared.ready = true;
@@ -56,7 +59,10 @@ const GLB_MODELS = {
 GLB_MODELS.gt = { model: 'concept', L: 4.4, W: 2.05, roofH: 1.2, belt: 0.85, hoodFront: 0.9, wsBase: 0.7, roofF: 0.0, roofR: -1.0, rearWin: -1.7, deck: 0.98, tail: 0.95, spoiler: false, cabinW: 1.5 };
 GLB_MODELS.muscle = { ...GLB_MODELS.super };
 GLB_MODELS.gt3rs = { model: 'gt3rs', auto: true, hud: 0xd8d018 };
-GLB_MODELS.cybertruck = { model: 'cybertruck', auto: true, hud: 0xb8bcc2 };
+// Tall keepTextures cabins need hand-tuned eyes — auto H*0.82 sits inside the roof.
+GLB_MODELS.cybertruck = { model: 'cybertruck', auto: true, hud: 0xb8bcc2, eye: { x: 0.36, y: 1.52, z: 0.85 }, hoodEye: { x: 0, y: 1.15, z: 2.15 } };
+GLB_MODELS.vito = { model: 'vito', auto: true, hud: 0xf2f2f2, eye: { x: 0.45, y: 1.36, z: 0.62 }, hoodEye: { x: 0, y: 1.12, z: 2.00 } };
+GLB_MODELS.mini = { model: 'mini', auto: true, hud: 0xc8102e };
 for (const id of ['compact', 'coupe', 'hatchback', 'minivan', 'offroad', 'pickup', 'sedan', 'sport', 'suv', 'wagon']) GLB_MODELS[id] = { model: id, auto: true, hud: { compact: 0x4cc0e0, coupe: 0x2030c0, hatchback: 0xe8d040, minivan: 0x801818, offroad: 0x2a4a20, pickup: 0x1a6a2a, sedan: 0xb0a040, sport: 0xc81818, suv: 0x202020, wagon: 0x4a90a0 }[id] };
 
 function bodyShape(p) {
@@ -97,8 +103,11 @@ function extrude(shape, width, bevel = 0.1) {
 }
 
 export { extrude };
-export function makePaint(color, livery = 'plain', color2 = 0xffffff) {
-  const m = new THREE.MeshPhysicalMaterial({ color, metalness: 0.55, roughness: 0.32, clearcoat: 1, clearcoatRoughness: 0.04, envMapIntensity: 1.25 });
+export function makePaint(color, livery = 'plain', color2 = 0xffffff, cheap = false) {
+  // AI/traffic: MeshStandard (no clearcoat). Player: Physical + clearcoat for the show-car look.
+  const m = cheap
+    ? new THREE.MeshStandardMaterial({ color, metalness: 0.55, roughness: 0.38, envMapIntensity: 1.05 })
+    : new THREE.MeshPhysicalMaterial({ color, metalness: 0.55, roughness: 0.32, clearcoat: 1, clearcoatRoughness: 0.04, envMapIntensity: 1.25 });
   const u = { uC2: { value: new THREE.Color(color2) }, uLiv: { value: { plain: 0, stripe: 1, police: 2, taxi: 3, split: 4 }[livery] || 0 }, uDmg: { value: 0 } };
   m.userData.u = u;
   m.onBeforeCompile = (sh) => {
@@ -106,9 +115,12 @@ export function makePaint(color, livery = 'plain', color2 = 0xffffff) {
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vLoc;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvLoc = position;');
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
       varying vec3 vLoc; uniform vec3 uC2; uniform float uLiv; uniform float uDmg;
-      float dh(vec3 p){ vec3 p3 = fract(p * 0.1031); p3 += dot(p3, p3.zyx + 31.32); return fract((p3.x + p3.y) * p3.z); }`)
-      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
-      { float fr = pow(1.0 - clamp(dot(normalize(normal), normalize(vViewPosition)), 0.0, 1.0), 3.0); totalEmissiveRadiance += diffuseColor.rgb * fr * 0.10; } // grazing-angle sheen: paint reads deeper and glossier at the silhouette`)
+      float dh(vec3 p){ vec3 p3 = fract(p * 0.1031); p3 += dot(p3, p3.zyx + 31.32); return fract((p3.x + p3.y) * p3.z); }`);
+    if (!cheap) {
+      sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+      { float fr = pow(1.0 - clamp(dot(normalize(normal), normalize(vViewPosition)), 0.0, 1.0), 3.0); totalEmissiveRadiance += diffuseColor.rgb * fr * 0.10; }`);
+    }
+    sh.fragmentShader = sh.fragmentShader
       .replace('#include <color_fragment>', `#include <color_fragment>
       float m2 = 0.0;
       if (uLiv > 0.5 && uLiv < 1.5) { float ax = abs(vLoc.x); m2 = step(0.1, ax) * step(ax, 0.26) * step(0.7, vLoc.y); }
@@ -156,10 +168,29 @@ function addBlurDisc(pivot, r, side) {
   pivot.add(m); return m;
 }
 
-function sprite(tex, size, color = 0xffffff) {
-  const m = new THREE.SpriteMaterial({ map: tex, color, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, fog: true });
+function sprite(tex, size, color = 0xffffff, opacity = 1) {
+  const m = new THREE.SpriteMaterial({ map: tex, color, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, fog: true, opacity });
   const s = new THREE.Sprite(m); s.scale.set(size, size, 1);
+  s.userData.baseScale = size; s.userData.baseOpacity = opacity;
   return s;
+}
+
+/** Layered lamp flare: tight hot core + soft bloom halo. kind: 'head' | 'tail'. sparse=true → core only (AI/traffic). */
+function addLampFlare(body, pos, kind, heads, sparse = false) {
+  const sh = S();
+  const isHead = kind === 'head';
+  const core = sprite(isHead ? sh.glowWCore : sh.glowRCore, isHead ? 0.55 : 0.38, isHead ? 0xfff8ec : 0xff6048, isHead ? 0.95 : 0.85);
+  core.position.copy(pos); core.userData.lamp = kind; core.userData.layer = 'core';
+  body.add(core); heads.push(core);
+  if (sparse) return;
+  const halo = sprite(isHead ? sh.glowW : sh.glowR, isHead ? 2.4 : 1.55, isHead ? 0xffe8c8 : 0xff2a18, isHead ? 0.42 : 0.5);
+  halo.position.copy(pos); halo.userData.lamp = kind; halo.userData.layer = 'halo';
+  body.add(halo); heads.push(halo);
+  if (isHead) {
+    const bloom = sprite(sh.glowW, 4.2, 0xffd9a0, 0.18);
+    bloom.position.copy(pos); bloom.userData.lamp = kind; bloom.userData.layer = 'bloom';
+    body.add(bloom); heads.push(bloom);
+  }
 }
 
 function addPoliceGear(body, p, hl, siren) {
@@ -173,11 +204,11 @@ function addPoliceGear(body, p, hl, siren) {
     const bMat = new THREE.MeshStandardMaterial({ color: 0x000040, emissive: 0x0030ff, emissiveIntensity: 0 });
     const r = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.12, 0.26), rMat); r.position.set(0.32, barY + 0.08, barZ); body.add(r);
     const b = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.12, 0.26), bMat); b.position.set(-0.32, barY + 0.08, barZ); body.add(b);
-    const rs = sprite(sh.glowR, 5); rs.position.set(0.35, barY + 0.15, barZ); body.add(rs);
-    const bs = sprite(sh.glowB, 5); bs.position.set(-0.35, barY + 0.15, barZ); body.add(bs);
+    const rs = sprite(sh.glowR, 6.5, 0xffffff, 0.9); rs.position.set(0.35, barY + 0.15, barZ); body.add(rs);
+    const bs = sprite(sh.glowB, 6.5, 0xffffff, 0.9); bs.position.set(-0.35, barY + 0.15, barZ); body.add(bs);
     // grille strobes
-    const rs2 = sprite(sh.glowR, 1.5); rs2.position.set(0.3, 0.45, hl + 0.1); body.add(rs2);
-    const bs2 = sprite(sh.glowB, 1.5); bs2.position.set(-0.3, 0.45, hl + 0.1); body.add(bs2);
+    const rs2 = sprite(sh.glowR, 2.2, 0xffffff, 0.85); rs2.position.set(0.3, 0.45, hl + 0.1); body.add(rs2);
+    const bs2 = sprite(sh.glowB, 2.2, 0xffffff, 0.85); bs2.position.set(-0.3, 0.45, hl + 0.1); body.add(bs2);
     Object.assign(siren, { rMat, bMat, rs, bs, rs2, bs2 });
     // POLICE text
     for (const sx of [-1, 1]) {
@@ -192,41 +223,58 @@ function buildGLBCar(kind, opts) {
   const sh = S();
   const cfg = { ...GLB_MODELS[kind] };
   const T = getTemplate(cfg.model, opts.lod === 'lo' ? 'lo' : 'hi') || getTemplate(cfg.model, 'hi');
+  const handEye = cfg.eye, handHood = cfg.hoodEye;
   if (cfg.auto) { // derive the hand-tuned profile numbers from the model's own bounds
     const H = T.size.y, Lz = T.size.z;
-    Object.assign(cfg, { L: Lz, W: T.size.x, roofH: H, belt: H * 0.62, hoodFront: H * 0.55, wsBase: Lz * 0.12, roofF: Lz * 0.04, roofR: -Lz * 0.26, rearWin: -Lz * 0.38, deck: H * 0.6, tail: H * 0.6, spoiler: false, cabinW: T.size.x * 0.8, eye: { x: T.size.x * 0.2, y: H * 0.82, z: -Lz * 0.04 } });
+    // Eye sits near belt height, slightly forward of centre — H*0.82 was burying tall vans/trucks in the roof.
+    const belt = H * 0.62;
+    Object.assign(cfg, { L: Lz, W: T.size.x, roofH: H, belt, hoodFront: H * 0.55, wsBase: Lz * 0.12, roofF: Lz * 0.04, roofR: -Lz * 0.26, rearWin: -Lz * 0.38, deck: H * 0.6, tail: H * 0.6, spoiler: false, cabinW: T.size.x * 0.8, eye: { x: T.size.x * 0.18, y: belt + (H - belt) * 0.28, z: Lz * 0.06 } });
   }
+  if (handEye) cfg.eye = handEye;
+  if (handHood) cfg.hoodEye = handHood;
   const p = { ...cfg, wheelR: T.wheelR, wb: (T.frontZ - T.rearZ) / 2 };
-  if (!p.eye && T.steer) p.eye = { x: T.steer.center.x, y: T.steer.center.y + 0.1, z: T.steer.center.z - 0.45 };
+  // Prefer a real steering-wheel pivot when we didn't hand-tune the eye (driver seat ≈ wheel + offset).
+  if (!handEye && T.steer) p.eye = { x: T.steer.center.x, y: T.steer.center.y + 0.12, z: T.steer.center.z - 0.48 };
   p.L = T.size.z; p.W = cfg.auto ? T.size.x : Math.min(T.size.x, cfg.W + 0.1);
   const root = new THREE.Group(); const body = new THREE.Group(); root.add(body);
-  const paint = makePaint(opts.color ?? 0xcc1010, opts.livery || 'plain', opts.color2 ?? 0xffffff);
+  const cheap = opts.lod === 'lo';
+  const paint = makePaint(opts.color ?? 0xcc1010, opts.livery || 'plain', opts.color2 ?? 0xffffff, cheap);
   paint.side = THREE.DoubleSide; // lets the cockpit camera see the hood/roof from inside
-  const tailMat = new THREE.MeshStandardMaterial({ color: 0x300000, emissive: 0xff1010, emissiveIntensity: 1.2, transparent: true, opacity: 0.92, roughness: 0.2 });
+  const tailMat = new THREE.MeshStandardMaterial({ color: 0x300000, emissive: 0xff1810, emissiveIntensity: 1.6, transparent: true, opacity: 0.92, roughness: 0.18 });
   const D = T.def;
   const dmgMats = [];
+  const glassMat = cheap ? sh.glassCheap : sh.glass;
   const pick = (mat) => {
     if (D.paintMat && D.paintMat.test(mat.name)) return paint;
     if (D.tailMat && D.tailMat.test(mat.name)) return tailMat;
-    if (mat.transmission > 0) return sh.glass;
+    if (mat.transmission > 0) return glassMat;
     if (D.keepTextures && opts.police && /^Body/i.test(mat.name)) return paint; // police livery repaints the body
     if (D.keepTextures && /^Body/i.test(mat.name)) { const c = mat.clone(); dmgMats.push(c); return c; } // own copy so crash damage can darken just this car
     return mat;
   };
   let glassMesh = null;
+  // Exterior shell meshes get hidden in cockpit (same idea as procedural cars hiding the body) so the camera isn't buried in double-sided body/roof.
+  const cockpitHide = D.cockpitHide || /^(Bodyl?|Plastic|Chrome(_Matte|_red)?|rubber_exterior|underside|Fake_tails|COOPER2?$|cromo|bajo|parrilla)/i;
+  const cockpitKeep = D.glassMat || /glass|vidrios|interior|int\b|luz|Light|tire|llanta|rin|disk|steer/i;
   for (const it of T.body) {
     const m = new THREE.Mesh(it.geo, pick(it.mat)); body.add(m);
-    if (D.glassMat && D.glassMat.test(it.mat.name)) glassMesh = m;
+    const mn = it.mat.name || '';
+    if (D.glassMat && D.glassMat.test(mn)) glassMesh = m;
+    if (cockpitHide.test(mn) && !cockpitKeep.test(mn)) m.userData.cockpitHide = true;
   }
+  // pick() remaps many mats onto shared paint/glass/tail — collapse duplicate material refs into one draw each
+  mergeByMaterial(body);
+  glassMesh = [...body.children].find((c) => c.isMesh && c.material === glassMat) || glassMesh;
   const parts = [glassMesh].filter(Boolean);
   if (cfg.hud !== undefined && !opts.police) paint.color.set(cfg.hud); // minimap / HUD colour
   const hl = p.L / 2;
   const heads = [];
+  const sparseFx = cheap;
   for (const sx of [-1, 1]) {
     const H = cfg.head ? { x: sx * cfg.head.x, y: cfg.head.y, z: cfg.head.z } : (T.heads && T.heads[sx]) || { x: sx * p.W * 0.3, y: p.roofH * 0.5, z: p.L / 2 - 0.12 };
     const Tl = cfg.tailL ? { x: sx * cfg.tailL.x, y: cfg.tailL.y, z: cfg.tailL.z } : (T.tails && T.tails[sx]) || { x: sx * p.W * 0.3, y: p.roofH * 0.52, z: -p.L / 2 + 0.12 };
-    const hs = sprite(sh.glowW, 0.9, 0xfff2dd); hs.material.opacity = 0.55; hs.position.set(H.x, H.y, H.z + 0.1); body.add(hs); heads.push(hs);
-    const ts = sprite(sh.glowR, 0.55); ts.material.opacity = 0.7; ts.position.set(Tl.x, Tl.y, Tl.z - 0.1); body.add(ts); heads.push(ts);
+    addLampFlare(body, new THREE.Vector3(H.x, H.y, H.z + 0.1), 'head', heads, sparseFx);
+    addLampFlare(body, new THREE.Vector3(Tl.x, Tl.y, Tl.z - 0.1), 'tail', heads, sparseFx);
   }
   const siren = {};
   if (opts.police) addPoliceGear(body, p, hl, siren);
@@ -238,8 +286,9 @@ function buildGLBCar(kind, opts) {
   for (const w of T.wheels) {
     const pivot = new THREE.Group(); pivot.position.set(w.center.x, w.center.y, w.center.z);
     const spin = new THREE.Group(); pivot.add(spin);
-    for (const it of w.parts) spin.add(new THREE.Mesh(it.geo, opts.police && /rim|wheel/i.test(it.mat.name) ? sh.darkRim : it.mat));
-    root.add(pivot); wheels.push({ pivot, spin, front: w.front, side: w.side, blur: addBlurDisc(pivot, T.wheelR, w.side) });
+    for (const it of w.parts) spin.add(new THREE.Mesh(it.geo, opts.police && /rim|wheel/i.test(it.mat.name || '') ? sh.darkRim : it.mat));
+    mergeByMaterial(spin);
+    root.add(pivot); wheels.push({ pivot, spin, front: w.front, side: w.side, blur: cheap ? null : addBlurDisc(pivot, T.wheelR, w.side) });
   }
   root.traverse((o) => { if (o.isMesh) { o.castShadow = !(o.material && o.material.transparent); o.receiveShadow = false; } });
   root.userData.sharedGeo = true;
@@ -255,12 +304,14 @@ export function buildCar(kind, opts = {}) {
   const body = new THREE.Group();
   root.add(body);
   let p = PROFILES[kind] || PROFILES.sedan;
-  const paint = makePaint(opts.color ?? 0xcc1010, opts.livery || 'plain', opts.color2 ?? 0xffffff);
+  const cheap = opts.lod === 'lo';
+  const paint = makePaint(opts.color ?? 0xcc1010, opts.livery || 'plain', opts.color2 ?? 0xffffff, cheap);
+  const glass = cheap ? sh.glassCheap : sh.glass;
   const parts = [];
   if (kind === 'truck') {
     p = { L: 6.6, W: 2.3, wheelR: 0.45, wb: 2.2 };
     const cab = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.9, 1.9), paint); cab.position.set(0, 1.45, 2.2);
-    const win = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.7, 0.05), sh.glass); win.position.set(0, 1.95, 3.16);
+    const win = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.7, 0.05), glass); win.position.set(0, 1.95, 3.16);
     const box = new THREE.Mesh(new THREE.BoxGeometry(2.4, 2.6, 4.3), new THREE.MeshStandardMaterial({ color: opts.color2 ?? 0xe8e8e8, roughness: 0.6 })); box.position.set(0, 1.85, -1.0);
     const chassis = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.4, 6.4), sh.black); chassis.position.set(0, 0.55, 0);
     parts.push(cab, win, box, chassis);
@@ -270,7 +321,7 @@ export function buildCar(kind, opts = {}) {
     const bm = new THREE.Mesh(bg, paint);
     body.add(bm); parts.push(bm);
     const cg = extrude(cabinShape(p), p.cabinW, 0.12);
-    const cm = new THREE.Mesh(cg, sh.glass); body.add(cm); parts.push(cm);
+    const cm = new THREE.Mesh(cg, glass); body.add(cm); parts.push(cm);
     // roof panel
     const roofLen = p.roofF - p.roofR;
     const roof = new THREE.Mesh(new THREE.BoxGeometry(p.cabinW - 0.18, 0.06, roofLen * 0.95), paint);
@@ -300,7 +351,7 @@ export function buildCar(kind, opts = {}) {
   }
   const hl = p.L / 2;
   // lights
-  const tailMat = new THREE.MeshStandardMaterial({ color: 0x300000, emissive: 0xff1010, emissiveIntensity: 1.2 });
+  const tailMat = new THREE.MeshStandardMaterial({ color: 0x300000, emissive: 0xff1810, emissiveIntensity: 1.6 });
   const tailY = kind === 'truck' ? 0.9 : p.tail - 0.1;
   const tail = new THREE.Mesh(new THREE.BoxGeometry(p.W * 0.82, 0.08, 0.05), tailMat);
   tail.position.set(0, tailY, -hl - 0.03); body.add(tail);
@@ -313,15 +364,14 @@ export function buildCar(kind, opts = {}) {
   for (const sx of [-1, 1]) {
     const h = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.09, 0.2), sh.head);
     h.position.set(sx * (p.W / 2 - 0.38), headY, headZ); h.rotation.x = -0.25; body.add(h);
-    const sp = sprite(sh.glowW, 0.75, 0xfff2dd); sp.material.opacity = 0.6; sp.position.set(sx * (p.W / 2 - 0.38), headY, headZ + 0.25); body.add(sp);
-    heads.push(sp);
-    const ts = sprite(sh.glowR, 0.5); ts.material.opacity = 0.7; ts.position.set(sx * (p.W / 2 - 0.3), tailY, -hl - 0.15); body.add(ts); heads.push(ts);
+    addLampFlare(body, new THREE.Vector3(sx * (p.W / 2 - 0.38), headY, headZ + 0.25), 'head', heads);
+    addLampFlare(body, new THREE.Vector3(sx * (p.W / 2 - 0.3), tailY, -hl - 0.15), 'tail', heads);
   }
   const siren = {};
   if (opts.police) addPoliceGear(body, p, hl, siren);
   // merge static body meshes per material to cut draw calls
   const merged = mergeByMaterial(body);
-  const partsOut = [merged.get(paint), merged.get(sh.glass)].filter(Boolean);
+  const partsOut = [merged.get(paint), merged.get(glass)].filter(Boolean);
   if (kind !== 'truck') { parts.length = 0; parts.push(...partsOut); }
   // wheels
   const wheels = [];

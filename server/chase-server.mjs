@@ -10,6 +10,8 @@ import { WebSocketServer } from 'ws';
 const PORT = +process.env.PORT || 3855;
 const HOST = process.env.HOST || '127.0.0.1';
 const MAX = 12;
+// Keep in sync with PLAYER_CARS.length in src/car.js (viper, kaiser, bruiser, cyber, gt3rs, vito, mini).
+const CAR_COUNT = 7;
 const RELAY = new Set(['s', 'wreck', 'spike', 'dmg', 'despawn', 'assign', 'bust', 'escape']);
 
 const players = new Map(); // id -> { id, ws, name, state: 'menu'|'ready'|'playing', role, car, mode }
@@ -63,7 +65,7 @@ wss.on('connection', (ws) => {
     switch (m.t) {
       case 'hello': me.name = clean(m.name); room(); break;
       case 'ready': {
-        me.name = clean(m.name || me.name); me.role = m.role === 'cop' ? 'cop' : 'racer'; me.car = (m.car | 0) % 5; me.mode = ['race', 'cop', 'free'].includes(m.mode) ? m.mode : 'race';
+        me.name = clean(m.name || me.name); me.role = m.role === 'cop' ? 'cop' : 'racer'; me.car = ((m.car | 0) % CAR_COUNT + CAR_COUNT) % CAR_COUNT; me.mode = ['race', 'cop', 'free'].includes(m.mode) ? m.mode : 'race';
         me.map = MAPS.has(m.map) ? m.map : 'coast';
         me.state = 'ready';
         const h = players.get(hostId());

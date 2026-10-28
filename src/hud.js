@@ -1,8 +1,9 @@
-// ===== HUD: speedometer, minimap, notifications, markers =====
+// ===== HUD: speedometer, G-meter, minimap, notifications, markers =====
 import * as THREE from 'three';
 import { clamp } from './util.js';
 import { fmtTime } from './game.js';
 import { WORLD_HALF } from './terrain.js';
+import { MS_TO_KMH, MS2_TO_G, fmtDistance } from './units.js';
 
 const $ = (id) => document.getElementById(id);
 const v = new THREE.Vector3();
@@ -11,6 +12,7 @@ export class HUD {
   constructor() {
     this.root = $('hud');
     this.speedo = $('speedo').getContext('2d');
+    this.gmeter = $('gmeter') ? $('gmeter').getContext('2d') : null;
     this.mini = $('minimap').getContext('2d');
     this.notifyBox = $('notify');
     this.markers = $('markers');
@@ -57,8 +59,11 @@ export class HUD {
   update(dt, g, camera, world, settings) {
     const pl = g.player; if (!pl) return;
     this.dmgFlash = Math.max(0, this.dmgFlash - dt * 1.5);
-    const kmh = Math.round(pl.speed * 3.6);
+    const kmh = Math.round(pl.speed * MS_TO_KMH);
     this.drawSpeedo(kmh, pl.rpm, pl.gear, pl.nitro, pl.health, pl.nitroActive, pl.vF < -0.5);
+    this.drawGMeter(pl.accelLong, pl.accelLat);
+    const trip = $('trip');
+    if (trip) trip.innerHTML = `TRIP <b>${fmtDistance(pl.odometer)}</b>`;
     // top-left info
     $('hud-time').textContent = fmtTime(g.raceTime || 0);
     if (g.mode === 'race') {
@@ -88,6 +93,12 @@ export class HUD {
     $('bustfill').style.width = `${Math.round(g.bust * 100)}%`;
     $('wrongway').classList.toggle('hidden', !g.wrongWay);
     $('draft').classList.toggle('hidden', !g.drafting);
+    const driftEl = $('drift-tag');
+    if (driftEl) {
+      const drifting = !!(pl.drifting && pl.speed > 15);
+      driftEl.classList.toggle('hidden', !drifting);
+      if (drifting) driftEl.textContent = (g.driftT || 0) > 2.2 ? 'PERFECT DRIFT' : (g.driftT || 0) > 1.0 ? `DRIFT  ${(g.driftT || 0).toFixed(1)}s` : 'DRIFTING';
+    }
     $('centerdot').classList.toggle('hidden', !settings.centerDot);
     // abilities (cop)
     if (g.mode === 'cop') {
@@ -112,6 +123,52 @@ export class HUD {
     } else arrow.classList.add('hidden');
     this.drawMinimap(g, world);
     this.updateMarkers(g, camera);
+  }
+
+  /** Racing G-meter: measured long/lat accel in m/s², displayed in g. Forward accel = up.
+   *  Lateral is flipped to match on-screen / steer left-right (A = left): body +X is screen-left
+   *  with the chase/cockpit camera looking along +Z, so raw IMU "right" reads opposite the dial. */
+  drawGMeter(longMs2, latMs2) {
+    const c = this.gmeter; if (!c) return;
+    const W = 132, H = 132, cx = 66, cy = 62, R = 52;
+    const gMax = 2.0; // dial full-scale (±2 g)
+    const gl = (longMs2 || 0) * MS2_TO_G;
+    const ga = -(latMs2 || 0) * MS2_TO_G; // negate so L/R match steering & screen
+    const mag = Math.hypot(gl, ga);
+    c.clearRect(0, 0, W, H);
+    // face
+    c.beginPath(); c.arc(cx, cy, R, 0, Math.PI * 2);
+    c.fillStyle = 'rgba(0,0,0,0.35)'; c.fill();
+    c.lineWidth = 2; c.strokeStyle = 'rgba(255,255,255,0.2)'; c.stroke();
+    // rings at 1g / 2g
+    for (const f of [0.5, 1, 1.5]) {
+      c.beginPath(); c.arc(cx, cy, R * (f / gMax), 0, Math.PI * 2);
+      c.strokeStyle = f === 1 ? 'rgba(255,176,0,0.35)' : 'rgba(255,255,255,0.12)';
+      c.lineWidth = f === 1 ? 1.5 : 1; c.stroke();
+    }
+    // crosshair
+    c.strokeStyle = 'rgba(255,255,255,0.28)'; c.lineWidth = 1;
+    c.beginPath(); c.moveTo(cx - R, cy); c.lineTo(cx + R, cy); c.moveTo(cx, cy - R); c.lineTo(cx, cy + R); c.stroke();
+    // labels
+    c.fillStyle = 'rgba(255,255,255,0.45)'; c.font = '700 9px Rajdhani, sans-serif'; c.textAlign = 'center';
+    c.fillText('ACCEL', cx, cy - R + 11);
+    c.fillText('BRAKE', cx, cy + R - 3);
+    c.textAlign = 'left'; c.fillText('L', cx - R + 4, cy + 3);
+    c.textAlign = 'right'; c.fillText('R', cx + R - 4, cy + 3);
+    // ball
+    const nx = clamp(ga / gMax, -1, 1), ny = clamp(-gl / gMax, -1, 1);
+    const bx = cx + nx * R * 0.92, by = cy + ny * R * 0.92;
+    const hot = mag > 1.15;
+    c.beginPath(); c.arc(bx, by, 7, 0, Math.PI * 2);
+    c.fillStyle = hot ? '#ff4a3a' : '#ffb000';
+    c.shadowColor = hot ? '#ff3030' : '#ffb000'; c.shadowBlur = 10; c.fill(); c.shadowBlur = 0;
+    c.strokeStyle = '#fff'; c.lineWidth = 1.5; c.stroke();
+    // numeric readout (true g from measured m/s²)
+    c.textAlign = 'center';
+    c.fillStyle = '#fff'; c.font = 'italic 800 18px Rajdhani, sans-serif';
+    c.fillText(`${mag.toFixed(2)} g`, cx, H - 4);
+    c.fillStyle = 'rgba(255,176,0,0.85)'; c.font = '700 10px Rajdhani, sans-serif';
+    c.fillText(`${gl >= 0 ? '+' : ''}${gl.toFixed(2)}↑  ${ga >= 0 ? '+' : ''}${ga.toFixed(2)}→`, cx, 12);
   }
 
   drawSpeedo(kmh, rpm, gear, nitro, health, nitroOn, rev) {

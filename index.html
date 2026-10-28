@@ -123,6 +123,10 @@ button { font-family: inherit; cursor: pointer; }
 #speedo-wrap { position: absolute; right: 16px; bottom: 6px; width: 300px; height: 300px; }
 #speedo-wrap::before { content: ''; position: absolute; inset: 30px; border-radius: 50%; background: radial-gradient(circle, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0.35) 55%, rgba(0,0,0,0) 72%); }
 #speedo { position: relative; }
+#gmeter-wrap { position: absolute; right: 310px; bottom: 28px; width: 132px; height: 152px; filter: drop-shadow(0 4px 14px rgba(0,0,0,0.55)); }
+#gmeter { display: block; background: radial-gradient(circle at 50% 46%, rgba(8,10,14,0.82) 0%, rgba(8,10,14,0.55) 70%, rgba(8,10,14,0) 100%); border-radius: 50%; }
+#trip { position: absolute; right: 28px; bottom: 8px; font: 700 13px Rajdhani, sans-serif; letter-spacing: 0.14em; color: rgba(255,255,255,0.7); text-align: right; text-shadow: 0 1px 4px #000; }
+#trip b { color: #fff; font-size: 15px; }
 #notify { position: absolute; top: 24%; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 6px; }
 .note { text-align: center; animation: noteIn .25s ease-out; transition: opacity .5s, transform .5s; }
 .note.out { opacity: 0; transform: translateY(-20px); }
@@ -139,6 +143,7 @@ button { font-family: inherit; cursor: pointer; }
 #arrow.hidden + #arrow-d { display: none; }
 #wrongway { position: absolute; top: 40%; left: 50%; transform: translateX(-50%); font-size: 44px; font-weight: 900; font-family: 'Noto Sans JP'; color: #ff3040; text-shadow: 0 0 20px #f00; animation: blink .5s infinite; }
 #draft { position: absolute; bottom: 120px; left: 50%; transform: translateX(-50%); font-size: 16px; font-weight: 700; letter-spacing: 0.3em; color: #9fdcff; text-shadow: 0 0 10px #39f; }
+#drift-tag { position: absolute; bottom: 148px; left: 50%; transform: translateX(-50%); font-size: 15px; font-weight: 800; letter-spacing: 0.28em; color: #ffd040; text-shadow: 0 0 12px #fa0; opacity: 0.95; }
 #centerdot { position: absolute; left: 50%; top: 50%; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%; background: rgba(255,255,255,0.8); box-shadow: 0 0 0 2px rgba(0,0,0,0.5); }
 #mouse-hint { position: absolute; top: 64%; left: 50%; transform: translateX(-50%); font-family: 'Noto Sans JP'; font-size: 13px; background: rgba(0,0,0,0.55); padding: 5px 14px; opacity: 0.85; }
 body.mouse-drag { cursor: grabbing; }
@@ -187,7 +192,12 @@ button:focus { outline: none; }
 .mapsel .mapbtn.on { background: linear-gradient(90deg, #ff2aa4, #00c8ff); color: #000; }
 .nav-mode .mapbtn.pad-focus { outline: 3px solid #fff; outline-offset: 2px; }
 .padhint { font-family: 'Noto Sans JP', sans-serif; font-size: 12px; color: rgba(255,255,255,0.55); margin-top: 10px; }
-@media (max-width: 900px) { #speedo-wrap { transform: scale(0.7); transform-origin: bottom right; } #minimap-wrap { transform: scale(0.7); transform-origin: top right; } }
+@media (max-width: 900px) {
+  #speedo-wrap { transform: scale(0.7); transform-origin: bottom right; }
+  #gmeter-wrap { transform: scale(0.7); transform-origin: bottom right; right: 220px; bottom: 18px; }
+  #minimap-wrap { transform: scale(0.7); transform-origin: top right; }
+  #trip { right: 18px; bottom: 4px; font-size: 11px; }
+}
 #wait-banner { position: fixed; left: 50%; bottom: 120px; transform: translateX(-50%); z-index: 60; padding: 10px 22px; background: rgba(8,10,14,0.82); border: 1px solid var(--line); color: #fff; font: 700 18px Rajdhani, sans-serif; letter-spacing: 0.12em; pointer-events: none; }
 #btn-go { position: fixed; left: 50%; bottom: 60px; transform: translateX(-50%); z-index: 61; min-width: 160px; font-size: 22px; }
 #wait-banner.hidden, #btn-go.hidden { display: none; }
@@ -223,11 +233,14 @@ button:focus { outline: none; }
     <div id="arrow" class="hidden"><svg viewBox="0 0 40 40" width="40" height="40"><path d="M20 2 L36 34 L20 26 L4 34 Z" fill="#ffb000" stroke="#000" stroke-width="2"/></svg></div>
     <div id="arrow-d"></div>
     <div id="minimap-wrap"><canvas id="minimap" width="240" height="240"></canvas></div>
+    <div id="gmeter-wrap"><canvas id="gmeter" width="132" height="132"></canvas></div>
     <div id="speedo-wrap"><canvas id="speedo" width="300" height="300"></canvas></div>
+    <div id="trip">TRIP <b>0 m</b></div>
     <div id="notify"></div>
     <div id="countdown"></div>
     <div id="wrongway" class="hidden">WRONG WAY!</div>
     <div id="draft" class="hidden">SLIPSTREAM</div>
+    <div id="drift-tag" class="hidden">DRIFTING</div>
     <div id="centerdot" class="hidden"></div>
     <div id="camlabel"></div>
     <div id="mouse-hint" class="hidden">Click to mouse-look (ESC to release)</div>
@@ -258,8 +271,9 @@ button:focus { outline: none; }
       <button class="mode cop" data-mode="cop"><b>INTERCEPTOR</b><span>Play as the police. Bust 4 illegal racers with spike strips and EMP.</span></button>
       <button class="mode free" data-mode="free"><b>FREE RUN</b><span>Roam the huge map freely. If a patrol spots you, escape.</span></button>
       <div class="h2" style="margin-top:22px">MAP</div>
-      <div class="segs mapsel" style="justify-content:flex-start;margin-bottom:6px">
+      <div class="segs mapsel" style="justify-content:flex-start;margin-bottom:6px;flex-wrap:wrap">
         <button class="mapbtn" data-map="tokyo">TOKYO NIGHT 東京</button>
+        <button class="mapbtn" data-map="stuttgart">STUTTGART DUSK</button>
         <button class="mapbtn" data-map="coast">REDVIEW COAST</button>
       </div>
       <div id="map-note" class="padhint" style="margin-top:2px"></div>

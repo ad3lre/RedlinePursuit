@@ -46,10 +46,12 @@ export function asphaltTexture() {
 }
 
 // Highway / connector texture. u across road, v along.
-export function roadTexture(lanesPerDir, highway, tokyo = false) {
+/** style: 'tokyo' | 'de' | 'us' (default) */
+export function roadTexture(lanesPerDir, highway, style = 'us') {
+  const tokyo = style === 'tokyo', de = style === 'de';
   const W = 512, H = 1024;
   const c = canvas(W, H), ctx = c.getContext('2d');
-  noiseFill(ctx, W, H, tokyo ? [28, 30, 38] : [52, 52, 56], tokyo ? 18 : 24, tokyo ? 88 : 21);
+  noiseFill(ctx, W, H, tokyo ? [28, 30, 38] : de ? [44, 46, 50] : [52, 52, 56], tokyo ? 18 : 22, tokyo ? 88 : de ? 55 : 21);
   // tire wear darker bands
   const laneW = (W * 0.86) / (lanesPerDir * 2);
   const x0 = W * 0.07;
@@ -86,6 +88,29 @@ export function roadTexture(lanesPerDir, highway, tokyo = false) {
       ctx.beginPath(); ctx.moveTo(cx, cy - 38); ctx.lineTo(cx + 14, cy); ctx.lineTo(cx, cy + 38); ctx.lineTo(cx - 14, cy); ctx.closePath(); ctx.stroke();
     }
     ctx.fillStyle = 'rgba(22,24,34,0.95)';
+    ctx.fillRect(0, 0, x0 - 28, H); ctx.fillRect(W - x0 + 28, 0, x0 - 28, H);
+    return tex(c);
+  }
+  if (de) {
+    // German StVO-style: white edges, white dashed lanes, solid white center on Autobahn, no US yellow
+    ctx.fillStyle = '#f2f4f6';
+    ctx.fillRect(x0 - 8, 0, 6, H); ctx.fillRect(W - x0 + 2, 0, 6, H);
+    if (highway) {
+      ctx.fillRect(W / 2 - 4, 0, 5, H);
+      // green reflective studs vibe on Autobahn shoulder
+      ctx.fillStyle = 'rgba(40,180,90,0.35)';
+      for (let y = 0; y < H; y += 28) { ctx.fillRect(x0 - 22, y, 10, 10); ctx.fillRect(W - x0 + 12, y, 10, 10); }
+    } else {
+      ctx.fillStyle = '#f2f4f6';
+      for (let y = 0; y < H; y += 220) ctx.fillRect(W / 2 - 3, y, 5, 100);
+    }
+    ctx.fillStyle = '#f2f4f6';
+    for (let l = 1; l < lanesPerDir * 2; l++) {
+      if (l === lanesPerDir) continue;
+      const x = x0 + laneW * l;
+      for (let y = 0; y < H; y += 240) ctx.fillRect(x - 2, y, 5, 95);
+    }
+    ctx.fillStyle = 'rgba(55,58,52,0.92)';
     ctx.fillRect(0, 0, x0 - 28, H); ctx.fillRect(W - x0 + 28, 0, x0 - 28, H);
     return tex(c);
   }
@@ -154,6 +179,39 @@ export function glowTexture(inner = 'rgba(255,255,255,1)', outer = 'rgba(255,255
   const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
   g.addColorStop(0, inner); g.addColorStop(0.25, inner.replace(/[\d.]+\)$/, '0.5)')); g.addColorStop(1, outer);
   ctx.fillStyle = g; ctx.fillRect(0, 0, size, size);
+  return tex(c, false, true);
+}
+
+/** Soft multi-stop radial for lamp flares (bright core, long pretty falloff). */
+export function softGlowTexture(r, g, b, size = 256) {
+  const c = canvas(size, size), ctx = c.getContext('2d');
+  const gr = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  gr.addColorStop(0, `rgba(${r},${g},${b},1)`);
+  gr.addColorStop(0.08, `rgba(${r},${g},${b},0.95)`);
+  gr.addColorStop(0.22, `rgba(${r},${g},${b},0.45)`);
+  gr.addColorStop(0.5, `rgba(${r},${g},${b},0.12)`);
+  gr.addColorStop(0.78, `rgba(${r},${g},${b},0.03)`);
+  gr.addColorStop(1, `rgba(${r},${g},${b},0)`);
+  ctx.fillStyle = gr; ctx.fillRect(0, 0, size, size);
+  return tex(c, false, true);
+}
+
+/** Elongated headlight volume: bright near tip, soft edges, fades along length. */
+export function beamTexture(size = 256) {
+  const c = canvas(size, size), ctx = c.getContext('2d');
+  const img = ctx.createImageData(size, size);
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    const u = (x + 0.5) / size, v = (y + 0.5) / size;
+    // After PlaneGeometry.rotateX(-PI/2), v=1 lands near the car and v=0 at the far tip
+    const along = 1 - v; // 0 = near car, 1 = far
+    const across = Math.abs(u - 0.5) * 2;
+    const width = 0.12 + along * 0.88;
+    const edge = Math.max(0, 1 - across / Math.max(width, 1e-3));
+    const a = edge ** 1.6 * (1 - along) ** 1.15 * (0.55 + 0.45 * (1 - along));
+    const i = (y * size + x) * 4;
+    img.data[i] = 255; img.data[i + 1] = 244; img.data[i + 2] = 220; img.data[i + 3] = Math.max(0, Math.min(255, a * 255));
+  }
+  ctx.putImageData(img, 0, 0);
   return tex(c, false, true);
 }
 

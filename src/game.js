@@ -5,7 +5,10 @@ import { RacerAI, CopAI, TrafficAI } from './ai.js';
 import { buildRoute, projectOnRoute, pointAtDist } from './roads.js';
 import { clamp, lerp, wrapAngle } from './util.js';
 import { WATER_LEVEL } from './terrain.js';
-import { glowTexture } from './textures.js';
+import { glowTexture, softGlowTexture, beamTexture } from './textures.js';
+import { MAPS } from './world.js';
+import { MS_TO_KMH } from './units.js';
+import { Feel } from './feel.js';
 
 const COP_SPEC = { name: 'INTERCEPTOR', kind: 'gt', top: 91, accel: 17, grip: 9.6, steer: 1.0, mass: 1.25, armor: 1.0 };
 const COP_SPEC2 = { name: 'PURSUIT SPEC', kind: 'super', top: 94, accel: 18, grip: 10, steer: 1.05, mass: 1.15, armor: 0.9 };
@@ -35,11 +38,65 @@ export class Game {
     this.player = null; this.state = 'idle'; this.time = 0; this.timeScale = 1; this.slowmo = 0;
     this.idc = 1; this.acc = 0; this.heat = 0;
     this.gates = this.makeGate();
-    this.copLights = [new THREE.PointLight(0xff0000, 0, 30, 2), new THREE.PointLight(0x0033ff, 0, 30, 2)];
+    this.copLights = [new THREE.PointLight(0xff2040, 0, 38, 2), new THREE.PointLight(0x2060ff, 0, 38, 2)];
     this.copLights.forEach((l) => this.scene.add(l));
-    this.headlight = new THREE.SpotLight(0xfff2e0, 0, 90, 0.5, 0.6, 1.5);
-    this.scene.add(this.headlight); this.scene.add(this.headlight.target);
+    // Dual low-beam spots + soft flood + local car fill; real illumination for night driving
+    const mkSpot = (color, dist, angle, pen, decay) => {
+      const l = new THREE.SpotLight(color, 0, dist, angle, pen, decay);
+      this.scene.add(l); this.scene.add(l.target); return l;
+    };
+    this.headlights = [
+      mkSpot(0xfff1dc, 120, 0.36, 0.48, 1.35),
+      mkSpot(0xfff1dc, 120, 0.36, 0.48, 1.35),
+    ];
+    this.headFlood = mkSpot(0xe8f2ff, 70, 0.78, 0.82, 1.55);
+    this.headFill = new THREE.PointLight(0xffe6c4, 0, 14, 2); this.scene.add(this.headFill);
+    this.brakeGlow = new THREE.PointLight(0xff1808, 0, 16, 2); this.scene.add(this.brakeGlow);
+    // legacy alias used by garage / clear
+    this.headlight = this.headlights[0];
+    this.beamGroup = this.makeHeadBeams();
+    this.scene.add(this.beamGroup);
     this.radioCd = 0;
+    this.feel = new Feel();
+    this.nearMiss = new Map();
+    this.driftT = 0;
+    this._wasDrifting = false;
+  }
+
+  /** Coupled arcade punch: FOV + blur + rumble + shake in one call. */
+  punch(kind, scale = 1) {
+    this.feel.punch(kind, scale, { rig: this.rig, input: this.input });
+    if (this.rig) this.rig.fovKick = Math.max(this.rig.fovKick || 0, this.feel.fovKick);
+  }
+
+  makeHeadBeams() {
+    const tex = beamTexture(256);
+    const mat = new THREE.MeshBasicMaterial({
+      map: tex, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending,
+      depthWrite: false, side: THREE.DoubleSide, fog: true,
+    });
+    const g = new THREE.Group();
+    for (const sx of [-1, 1]) {
+      const vol = new THREE.Group();
+      // Crossed sheets along +Z (car forward): geo is XY, spin so long axis runs down the road
+      for (let i = 0; i < 2; i++) {
+        const geo = new THREE.PlaneGeometry(5.2, 36);
+        geo.rotateX(-Math.PI / 2); // → XZ plane, length along Z
+        const m = new THREE.Mesh(geo, mat);
+        m.rotation.z = i * Math.PI / 2;
+        m.position.z = 18;
+        vol.add(m);
+      }
+      const haze = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: softGlowTexture(255, 236, 200, 128), color: 0xffe8c8, blending: THREE.AdditiveBlending,
+        transparent: true, opacity: 0.35, depthWrite: false, fog: true,
+      }));
+      haze.scale.set(2.8, 2.8, 1); haze.position.set(0, 0, 1.2); vol.add(haze);
+      vol.position.x = sx * 0.55;
+      g.add(vol);
+    }
+    g.visible = false;
+    return g;
   }
 
   // ---------------- helpers ----------------
@@ -86,6 +143,14 @@ export class Game {
       if (p.x > 550) return Math.abs(p.z) < 220 ? 'Rainbow Bridge' : 'the Wangan Bayshore Expressway';
       return 'the Hakone mountain touge';
     }
+    if (this.world.mapId === 'stuttgart') {
+      if (Math.abs(p.x + 60) < 140 && Math.abs(p.z + 60) < 140) return 'Schlossplatz';
+      if (Math.abs(p.x - 60) < 140 && Math.abs(p.z + 180) < 140) return 'Fernsehturm';
+      if (Math.abs(p.x) < 640 && Math.abs(p.z) < 640) return p.z < 0 ? 'Mitte & Königstraße' : 'Südstadt';
+      if (p.x > 500) return 'Neckartal';
+      if (p.x < -500) return 'the Weinberge';
+      return Math.hypot(p.x, p.z) > 1100 ? 'Stuttgarter Ring' : 'the hills';
+    }
     if (Math.abs(p.x) < 640 && Math.abs(p.z) < 640) return 'downtown';
     if (Math.hypot(p.x, p.z) > 1100) return p.x > 1000 ? 'the coast highway' : 'the highway';
     return 'the hills';
@@ -122,7 +187,9 @@ export class Game {
     this.rig.endCine();
     this.timeScale = 1; this.slowmo = 0;
     this.copLights.forEach((l) => (l.intensity = 0));
-    this.headlight.intensity = 0;
+    for (const l of this.headlights) l.intensity = 0;
+    this.headFlood.intensity = 0; this.headFill.intensity = 0; this.brakeGlow.intensity = 0;
+    if (this.beamGroup) this.beamGroup.visible = false;
   }
 
   raceRoute() {
@@ -138,28 +205,34 @@ export class Game {
     const pick = (tag) => ramps.filter((r) => r.tag === tag).sort((a, b) => b.loopIndex - a.loopIndex)[0];
     const pickLow = (tag) => ramps.filter((r) => r.tag === tag).sort((a, b) => a.loopIndex - b.loopIndex)[0];
     if (this.world.mapId === 'tokyo') {
-      // Tokyo Night route: Shibuya Scramble (0,0) -> past Tokyo Tower -> Rainbow Bridge over Tokyo Bay ->
-      // Wangan Bayshore Expressway -> Shinjuku Kabukicho under the overhead Shuto viaduct -> Hakone/Haruna mountain touge -> Akihabara finish
-      const eastIn = ramps.filter((r) => r.tag === 'east').find((r) => r.loopIndex > 0 && r.loopIndex < 120) || pickLow('east');
-      const southOut = pickLow('south');
-      const northIn = pickLow('north');
-      const westOut = pick('west');
+      // Tokyo Night route: straight launch north through Shibuya Scramble (0,0) & past Tokyo Tower (60,60) ->
+      // Shinjuku Dori onto the Hakone/Haruna mountain touge & Wangan Loop -> Shibuya Dori back into the city ->
+      // overhead Shuto Viaduct avenue (z = 240) -> Akihabara / Roppongi finish (0 self-overlaps, 0 border-street kinks)
+      const entry = pickLow('north'), exit = pick('south');
       const wps = [
-        C(-240, 240), C(0, 240), C(0, 0), C(600, 0),
-        eastIn.navIds[0], eastIn.navIds[eastIn.navIds.length - 1],
-        L(18), L(38), L(62),
-        southOut.navIds[southOut.navIds.length - 1], southOut.navIds[0],
-        C(0, 600), C(-120, 600), C(-120, -600), C(0, -600),
-        northIn.navIds[0], northIn.navIds[northIn.navIds.length - 1],
-        L(-115), L(-138), L(-160),
-        westOut.navIds[westOut.navIds.length - 1], westOut.navIds[0],
-        C(-600, 0), C(-360, 0), C(-360, -240), C(120, -240),
+        C(0, 360), C(0, -600),
+        entry.navIds[0], entry.navIds[entry.navIds.length - 1],
+        L(-115), L(-135), L(-160), L(180), L(155), L(130), L(108),
+        exit.navIds[exit.navIds.length - 1], exit.navIds[0],
+        C(0, 600), C(0, 240), C(360, 240), C(360, -120), C(120, -120), C(120, 120), C(-240, 120), C(-240, -120),
       ];
       this._route = buildRoute(nav, wps);
       return this._route;
     }
+    if (this.world.mapId === 'stuttgart') {
+      const entry = pickLow('north'), exit = pick('south');
+      const wps = [
+        C(0, 360), C(0, -600),
+        entry.navIds[0], entry.navIds[entry.navIds.length - 1],
+        L(-115), L(-135), L(-160), L(180), L(155), L(130), L(108),
+        exit.navIds[exit.navIds.length - 1], exit.navIds[0],
+        C(0, 600), C(0, 240), C(360, 240), C(360, -120), C(120, -120), C(-240, -120), C(-240, 120),
+      ].filter((id) => id != null);
+      this._route = buildRoute(nav, wps);
+      return this._route;
+    }
     const entry = pickLow('north'), exit = pick('south'); // entry merges heading with the race direction (lower index), exit leaves it (higher index)
-    const wps = [C(0, 360), C(0, -600), entry.navIds[0], entry.navIds[entry.navIds.length - 1], L(-115), L(-135), L(-160), L(180), L(155), L(130), L(108), exit.navIds[exit.navIds.length - 1], exit.navIds[0], C(0, 600), C(360, 600), C(360, 240), C(120, 240), C(120, -120), C(-240, -120), C(-240, 120)];
+    const wps = [C(0, 360), C(0, -600), entry.navIds[0], entry.navIds[entry.navIds.length - 1], L(-115), L(-135), L(-160), L(180), L(155), L(130), L(108), exit.navIds[exit.navIds.length - 1], exit.navIds[0], C(0, 600), C(0, 240), C(360, 240), C(360, -120), C(120, -120), C(-240, -120), C(-240, 120)];
     this._route = buildRoute(nav, wps);
     return this._route;
   }
@@ -204,7 +277,7 @@ export class Game {
         let ri = 0;
         grid.forEach((g, i) => {
           if (i === pIdx) { place(pl, g[0], g[1]); return; }
-          const ms = PLAYER_CARS[(carIdx + 1 + ri) % 3];
+          const ms = PLAYER_CARS[(carIdx + 1 + ri) % PLAYER_CARS.length];
           const col = RACER_COLORS[ri % RACER_COLORS.length];
           const rm = this.rivalModel(carIdx, ri);
           const r = this.addCar({ ...ms, kind: rm.kind || ms.kind, top: ms.top * (0.985 + ri * 0.012) }, { role: 'racer', model: rm.model, color: col[0], color2: col[1], livery: 'stripe', name: RACER_NAMES[ri] });
@@ -218,7 +291,7 @@ export class Game {
       } else {
         // cop mode: 4 racers ahead, player + 2 partners behind
         for (let i = 0; i < 4; i++) {
-          const ms = PLAYER_CARS[i % 3];
+          const ms = PLAYER_CARS[i % PLAYER_CARS.length];
           const col = RACER_COLORS[i];
           const rm = this.rivalModel(carIdx, i);
           const r = this.addCar({ ...ms, kind: rm.kind || ms.kind, top: ms.top * (0.99 + i * 0.008), armor: ms.armor * 1.0 }, { role: 'racer', model: rm.model, color: col[0], color2: col[1], livery: 'stripe', name: RACER_NAMES[i] });
@@ -491,7 +564,7 @@ export class Game {
   startDemo() {
     const route = this.raceRoute();
     this.route = null; this.demoRoute = route;
-    const pl = this.addCar(PLAYER_CARS[Math.floor(Math.random() * 3)], { role: 'player', name: 'DEMO' });
+    const pl = this.addCar(PLAYER_CARS[Math.floor(Math.random() * PLAYER_CARS.length)], { role: 'player', name: 'DEMO' });
     this.player = pl;
     const P = {};
     const start = 200 + Math.random() * (route.length - 1500);
@@ -531,7 +604,8 @@ export class Game {
   }
   spawnInitialTraffic() {
     const nav = this.world.nav;
-    const count = this.settings.quality === 0 ? 18 : 30;
+    // denser pack so near-misses happen every few seconds on highways
+    const count = this.settings.quality === 0 ? 20 : this.settings.quality === 1 ? 32 : 42;
     for (let i = 0; i < count; i++) {
       let wsum = 0; for (const t of TRAFFIC_SPECS) wsum += t.w || 1; let wr = Math.random() * wsum; let ts = TRAFFIC_SPECS[0]; for (const t of TRAFFIC_SPECS) { wr -= t.w || 1; if (wr <= 0) { ts = t; break; } }
       const spec = { kind: ts.kind, top: 34, accel: 8, grip: 8, steer: 0.8, mass: ts.kind === 'truck' ? 3 : ts.kind === 'suv' ? 1.6 : 1.1, armor: 1 };
@@ -544,12 +618,29 @@ export class Game {
   respawnTraffic(c, initial = false) {
     const nav = this.world.nav, pl = this.player;
     const camF = new THREE.Vector3(); this.camera.getWorldDirection(camF);
-    for (let tries = 0; tries < 30; tries++) {
+    const fx = Math.sin(pl.yaw), fz = Math.cos(pl.yaw);
+    // Prefer packing cars ahead on the player's road so the frame stays "alive"
+    if (!initial && this.route && Math.random() < 0.55) {
+      const ahead = (this.playerProgress || 0) + 80 + Math.random() * 280;
+      if (ahead < this.route.length - 40) {
+        const p = pointAtDist(this.route, ahead, {});
+        const lane = (Math.random() < 0.5 ? -1 : 1) * (3.2 + Math.random() * 4);
+        const x = p.x + -p.dz * lane, z = p.z + p.dx * lane;
+        if (!this.cars.some((o) => o !== c && (o.pos.x - x) ** 2 + (o.pos.z - z) ** 2 < 280)) {
+          const n = nav.nearest(x, z);
+          if (n) { c.ai.spawnAt(n, this); c.place(x, z, Math.atan2(p.dx, p.dz), c.ai.cruise * 0.85); return; }
+        }
+      }
+    }
+    for (let tries = 0; tries < 40; tries++) {
       const n = nav.nodes[Math.floor(Math.random() * nav.nodes.length)];
       const dx = n.x - pl.pos.x, dz = n.z - pl.pos.z; const d = Math.hypot(dx, dz);
-      if (initial ? (d < 40 || d > 700) : (d < 260 || d > 650)) continue;
-      if (!initial && (dx * camF.x + dz * camF.z) / d > 0.5 && d < 400) continue;
-      if (this.cars.some((o) => o !== c && (o.pos.x - n.x) ** 2 + (o.pos.z - n.z) ** 2 < 400)) continue;
+      if (initial ? (d < 40 || d > 700) : (d < 180 || d > 580)) continue;
+      const aheadDot = (dx * fx + dz * fz) / d;
+      // bias toward ahead/sideband traffic; avoid dumping cars into the camera frustum on top of the player
+      if (!initial && aheadDot < -0.2 && Math.random() < 0.7) continue;
+      if (!initial && (dx * camF.x + dz * camF.z) / d > 0.55 && d < 220) continue;
+      if (this.cars.some((o) => o !== c && (o.pos.x - n.x) ** 2 + (o.pos.z - n.z) ** 2 < 320)) continue;
       c.ai.spawnAt(n, this);
       return;
     }
@@ -663,27 +754,36 @@ export class Game {
 
   // ---------------- events ----------------
   onLanding(car, air) {
-    if (car === this.player) this.input.vibrate(180 + air * 120, clamp(air / 1.2, 0.3, 1), 0.5);
     if (car === this.player) {
       this.audio.landing(clamp(air, 0.3, 1));
-      this.rig.addShake(0.5);
+      this.punch('landing', clamp(air / 0.9, 0.4, 1.2));
       if (air > 0.6) { this.notify('AIR TIME', `${air.toFixed(1)}s`, '#40d0ff'); car.nitro = Math.min(1, car.nitro + 0.1); this.bounty += 500; }
     }
   }
   onImpact(car, other, impact, x, z, tag) {
     const pl = this.player;
     const near = car.pos.distanceTo(this.camera.position) < 120;
+    const tier = Feel.impactTier(impact);
     if (near) {
-      this.vfx.sparks(x, car.pos.y, z, (car.pos.x - x), (car.pos.z - z), Math.min(30, impact * 1.2), 0.7);
-      if (impact > 10) this.vfx.impactFlash(x, car.pos.y, z, clamp(impact / 40, 0.3, 1));
+      const sparkN = tier === 'smash' ? Math.min(48, impact * 1.8) : tier === 'hit' ? Math.min(30, impact * 1.2) : Math.min(14, impact);
+      this.vfx.sparks(x, car.pos.y, z, (car.pos.x - x), (car.pos.z - z), sparkN, tier === 'graze' ? 0.45 : 0.75);
+      if (tier !== 'graze') this.vfx.impactFlash(x, car.pos.y, z, clamp(impact / 40, 0.25, 1));
+      if (tier === 'smash') this.vfx.debrisBurst(x, car.pos.y, z, car.vel.x, car.vel.y, 4);
       const dist = car.pos.distanceTo(pl.pos);
       const vol = clamp(1 - dist / 120, 0, 1);
-      if (vol > 0) this.audio.crash(clamp(impact / 35, 0.1, 1.2) * vol);
+      if (vol > 0) {
+        if (tier === 'graze') this.audio.scrape(0.35 * vol);
+        else this.audio.crash(clamp(impact / 35, 0.1, 1.2) * vol * (tier === 'smash' ? 1.15 : 0.85));
+      }
     }
-    if (car === pl) { this.rig.addShake(clamp(impact / 25, 0.1, 1)); this.hud.flashDamage(clamp(impact / 30, 0.2, 1)); this.input.vibrate(120 + impact * 8, clamp(impact / 20, 0.25, 1), clamp(impact / 28, 0.15, 0.8)); }
-    // static damage
+    if (car === pl) {
+      this.punch(tier, clamp(impact / (tier === 'smash' ? 28 : 18), 0.35, 1.3));
+      if (tier !== 'graze') this.hud.flashDamage(clamp(impact / 30, 0.15, 1));
+    }
+    // static damage — scrapes barely hurt; big hits still matter
     if (!other) {
-      const dmg = Math.max(0, impact - 7) * 0.006 / (car.spec.armor || 1) * (car.role === 'traffic' ? 0 : 1) * (car.role === 'cop' ? 1.2 : car.role === 'racer' ? 0.5 : 1);
+      const floor = car === pl ? (tier === 'graze' ? 14 : 9) : 7;
+      const dmg = Math.max(0, impact - floor) * 0.006 / (car.spec.armor || 1) * (car.role === 'traffic' ? 0 : 1) * (car.role === 'cop' ? 1.2 : car.role === 'racer' ? 0.5 : 1);
       this.damage(car, dmg, null);
     }
   }
@@ -771,16 +871,19 @@ export class Game {
           b.pos.x += dx * pen * (ib / s); b.pos.z += dz * pen * (ib / s);
           const rel = (b.vel.x - a.vel.x) * dx + (b.vel.y - a.vel.y) * dz;
           if (rel < 0) {
-            const jimp = (-(1 + 0.3) * rel) / s;
+            // Arcade: keep more forward speed on player scrapes so traffic bumps don't stall the chase
+            const involvesPl = a === this.player || b === this.player;
+            const bounce = involvesPl ? 0.12 : 0.3;
+            const jimp = (-(1 + bounce) * rel) / s;
             a.vel.x -= dx * jimp * ia; a.vel.y -= dz * jimp * ia;
             b.vel.x += dx * jimp * ib; b.vel.y += dz * jimp * ib;
-            // friction-ish tangential coupling
+            // friction-ish tangential coupling (lighter for player so you glance off)
             const tx = -dz, tz = dx;
             const relT = (b.vel.x - a.vel.x) * tx + (b.vel.y - a.vel.y) * tz;
-            const f = relT * 0.15;
+            const f = relT * (involvesPl ? 0.08 : 0.15);
             a.vel.x += tx * f * ia / s; a.vel.y += tz * f * ia / s; b.vel.x -= tx * f * ib / s; b.vel.y -= tz * f * ib / s;
-            a.angVel += (afx * dz - afz * dx) * sa * -rel * 0.03 * ia;
-            b.angVel += (bfx * -dz - bfz * -dx) * sb * -rel * 0.03 * ib;
+            a.angVel += (afx * dz - afz * dx) * sa * -rel * (involvesPl ? 0.018 : 0.03) * ia;
+            b.angVel += (bfx * -dz - bfz * -dx) * sb * -rel * (involvesPl ? 0.018 : 0.03) * ib;
             if (-rel > maxImp) { maxImp = -rel; hn = { x: dx, z: dz }; hx = (ax + bx) / 2; hz = (az + bz) / 2; }
             hit = true;
           }
@@ -796,18 +899,21 @@ export class Game {
     const bInto = -(b.vel.x * n.x + b.vel.y * n.z);
     const att = aInto >= bInto ? a : b, vic = att === a ? b : a;
     const involvesPlayer = a === pl || b === pl;
+    const tier = Feel.impactTier(impact);
     if (involvesPlayer || a.pos.distanceTo(this.camera.position) < 100) {
-      this.vfx.sparks(x, (a.pos.y + b.pos.y) / 2, z, -n.x, -n.z, Math.min(40, impact * 1.5), 0.8);
-      if (impact > 12) this.vfx.impactFlash(x, a.pos.y, z, clamp(impact / 40, 0.3, 1));
-      if (impact > 18) this.vfx.debrisBurst(x, a.pos.y, z, att.vel.x, att.vel.y, 3);
+      const sparkN = tier === 'smash' ? Math.min(55, impact * 2) : Math.min(40, impact * 1.5);
+      this.vfx.sparks(x, (a.pos.y + b.pos.y) / 2, z, -n.x, -n.z, sparkN, tier === 'graze' ? 0.5 : 0.85);
+      if (tier !== 'graze') this.vfx.impactFlash(x, a.pos.y, z, clamp(impact / 40, 0.25, 1));
+      if (tier === 'smash') this.vfx.debrisBurst(x, a.pos.y, z, att.vel.x, att.vel.y, 5);
       const vol = clamp(1 - a.pos.distanceTo(pl.pos) / 120, 0, 1);
-      this.audio.crash(clamp(impact / 30, 0.15, 1.3) * vol);
+      if (tier === 'graze') this.audio.scrape(0.4 * vol);
+      else this.audio.crash(clamp(impact / 30, 0.15, 1.3) * vol * (tier === 'smash' ? 1.2 : 0.9));
     }
     if (involvesPlayer) {
-      this.rig.addShake(clamp(impact / 20, 0.15, 1.1));
+      this.punch(tier, clamp(impact / (tier === 'smash' ? 26 : 16), 0.4, 1.35));
       const other = a === pl ? b : a;
       this.lastHitWith = other; this.lastHitT = this.time;
-      if (vic === pl) this.hud.flashDamage(clamp(impact / 25, 0.2, 1));
+      if (vic === pl && tier !== 'graze') this.hud.flashDamage(clamp(impact / 25, 0.15, 1));
     }
     for (const c of [a, b]) if (c.role === 'traffic' && impact > 6) { c.ai.stunned = 2 + Math.random() * 2; }
     const roleDmg = (victim, attacker) => {
@@ -865,7 +971,7 @@ export class Game {
       else if (this.state === 'playing' && !pl.wrecked && this.respawnT <= 0 && !this.spectating) {
         const d = this.inputLocked ? { steer: 0, throttle: 0, brake: 0, handbrake: 0, nitro: 0 } : input.drive(dtReal);
         Object.assign(pl.input, d);
-        if (pl.nitroActive === false && d.nitro && pl.nitro > 0.05 && !this._nitroWas) { this.audio.nitroStart(); this.rig.addShake(0.3); this.input.vibrate(260, 0.45, 0.7); }
+        if (pl.nitroActive === false && d.nitro && pl.nitro > 0.05 && !this._nitroWas) { this.audio.nitroStart(); this.punch('nitro', 1); }
         this._nitroWas = d.nitro && pl.nitro > 0.05;
         if (input.hit('KeyR', 'PadBack')) this.resetPlayer();
         if (this.mode === 'cop') this.copAbilities(dt);
@@ -877,7 +983,24 @@ export class Game {
       if (this.demo) this.demoRules(dt); else this.rules(dt);
       this.updateTraffic(dt);
       this.updateSpikes(dt);
-      for (const c of this.cars) { c.syncVisual(dt, this.time); this.vfx.carEffects(c, dt, this.world); }
+      const cam = this.camera.position;
+      const q = this.settings.quality ?? 1;
+      const hideR2 = (q === 0 ? 280 : q === 1 ? 380 : 520) ** 2;
+      const nearR2 = 90 ** 2, fxR2 = 150 ** 2, castR2 = 60 ** 2;
+      for (const c of this.cars) {
+        const dx = c.pos.x - cam.x, dz = c.pos.z - cam.z, d2 = dx * dx + dz * dz;
+        const isPl = c === pl;
+        if (!isPl && d2 > hideR2) {
+          if (c.visible) c.setVisible(false);
+          c.setShadowCast(false);
+          continue;
+        }
+        if (!c.visible) c.setVisible(true);
+        const detail = isPl ? 2 : d2 < nearR2 ? 1 : 0;
+        c.syncVisual(dt, this.time, detail);
+        c.setShadowCast(isPl || d2 < castR2);
+        if (isPl || d2 < fxR2) this.vfx.carEffects(c, dt, this.world);
+      }
     }
     this.updateLights();
     this.maxSpeed = Math.max(this.maxSpeed, pl.speed);
@@ -1123,6 +1246,7 @@ export class Game {
         if (this.lastHeat !== undefined && this.heat > this.lastHeat) {
           this.notify(`HEAT LEVEL ${this.heat}`, ['', '', 'Backup units approaching', 'Roadblocks deploying', 'Armored SUVs dispatched', 'All units responding'][this.heat], '#ff4040');
           this.radio(['', '', 'Requesting backup!', 'Setting up roadblocks!', 'Sending in the heavies!', 'All units, maximum pursuit authorized!'][this.heat]);
+          this.punch('heatUp', 0.7 + this.heat * 0.1);
         }
         this.lastHeat = this.heat;
       }
@@ -1151,35 +1275,55 @@ export class Game {
   styleRules(dt) {
     const pl = this.player;
     const fx = Math.sin(pl.yaw), fz = Math.cos(pl.yaw), rx = -fz, rz = fx;
-    // near miss
+    // near miss — slightly wider latch so dense traffic pays off
     for (const o of this.cars) {
       if (o === pl || o.wrecked) continue;
       const dx = o.pos.x - pl.pos.x, dz = o.pos.z - pl.pos.z;
-      if (Math.abs(dx) > 14 || Math.abs(dz) > 14) { this.nearMiss.delete(o.id); continue; }
+      if (Math.abs(dx) > 16 || Math.abs(dz) > 16) { this.nearMiss.delete(o.id); continue; }
       const along = dx * fx + dz * fz, lat = Math.abs(dx * rx + dz * rz);
       const prev = this.nearMiss.get(o.id);
       const relSpeed = Math.hypot(pl.vel.x - o.vel.x, pl.vel.y - o.vel.y);
-      if (prev !== undefined && prev > 0 && along <= 0 && lat < 3.6 && relSpeed > 20 && !(this.lastHitWith === o && this.time - this.lastHitT < 1.5)) {
+      if (prev !== undefined && prev > 0 && along <= 0 && lat < 4.0 && relSpeed > 16 && !(this.lastHitWith === o && this.time - this.lastHitT < 1.5)) {
+        const close = lat < 2.4;
         this.audio.nearMiss();
-        pl.nitro = Math.min(1, pl.nitro + 0.08); this.bounty += 250;
-        this.notify('NEAR MISS', '+250', '#40d0ff');
+        const reward = close ? 400 : 250;
+        pl.nitro = Math.min(1, pl.nitro + (close ? 0.14 : 0.09));
+        this.bounty += reward;
+        this.notify(close ? 'CLOSE CALL' : 'NEAR MISS', `+${reward}`, '#40d0ff');
+        this.punch('nearMiss', close ? 1.15 : 0.85);
       }
       this.nearMiss.set(o.id, along);
     }
-    // drift
+    // drift grammar: enter punch → hold charge → exit boost
+    if (pl.drifting && !this._wasDrifting && pl.speed > 15) this.punch('driftEnter', 0.8);
     if (pl.drifting && pl.speed > 15) {
-      this.driftT += dt; pl.nitro = Math.min(1, pl.nitro + dt * 0.09); this.bounty += dt * 120;
+      this.driftT += dt; pl.nitro = Math.min(1, pl.nitro + dt * 0.11); this.bounty += dt * 140;
+      // light continuous rumble while sideways
+      if (Math.floor(this.driftT * 4) !== Math.floor((this.driftT - dt) * 4)) this.input.vibrate(40, 0.12, 0.35);
     } else if (this.driftT > 0) {
-      if (this.driftT > 1.2) this.notify('DRIFT', `${this.driftT.toFixed(1)}s  +${Math.round(this.driftT * 120)}`, '#ffd040');
+      const t = this.driftT;
+      const pts = Math.round(t * 140);
+      if (t > 0.55 && pl.speed > 18) {
+        // exit boost: short top-speed + accel surge scaled by hold time
+        pl.exitBoost = Math.min(1.4, 0.35 + t * 0.35);
+        pl.nitro = Math.min(1, pl.nitro + 0.06 + t * 0.05);
+        const label = t > 2.4 ? 'PERFECT DRIFT' : t > 1.2 ? 'DRIFT' : 'DRIFT EXIT';
+        this.notify(label, `${t.toFixed(1)}s  +${pts}`, '#ffd040');
+        this.punch('driftExit', clamp(0.55 + t * 0.25, 0.55, 1.25));
+        this.audio.whoosh();
+      } else if (t > 1.2) {
+        this.notify('DRIFT', `${t.toFixed(1)}s  +${pts}`, '#ffd040');
+      }
       this.driftT = 0;
     }
+    this._wasDrifting = pl.drifting;
     // drafting
     this.drafting = false;
     if (pl.speed > 28) for (const o of this.cars) {
       if (o === pl) continue;
       const dx = o.pos.x - pl.pos.x, dz = o.pos.z - pl.pos.z;
       const along = dx * fx + dz * fz, lat = Math.abs(dx * rx + dz * rz);
-      if (along > 5 && along < 20 && lat < 1.8) { this.drafting = true; pl.nitro = Math.min(1, pl.nitro + dt * 0.07); break; }
+      if (along > 5 && along < 22 && lat < 2.0) { this.drafting = true; pl.nitro = Math.min(1, pl.nitro + dt * 0.09); break; }
     }
     if (!pl.grounded) pl.nitro = Math.min(1, pl.nitro + dt * 0.1);
     // speed bounty
@@ -1257,7 +1401,7 @@ export class Game {
     this.spectating = null;
     this.state = 'ending';
     const pl = this.player;
-    this.result = { reason, time: this.raceTime, place: this.playerPlace || this.position, takedowns: this.takedowns, bounty: Math.round(this.bounty), maxSpeed: this.maxSpeed * 3.6, busted: this.bustedRacers, escaped: this.escapedRacers, escapes: this.escapes, heat: this.heat, total: this.racers.length, multi: !!this.multi, allOut };
+    this.result = { reason, time: this.raceTime, place: this.playerPlace || this.position, takedowns: this.takedowns, bounty: Math.round(this.bounty), maxSpeed: this.maxSpeed * MS_TO_KMH, odometer: this.player ? this.player.odometer : 0, busted: this.bustedRacers, escaped: this.escapedRacers, escapes: this.escapes, heat: this.heat, total: this.racers.length, multi: !!this.multi, allOut };
     if (allOut) { this.audio.busted(); this.notify('GAME OVER', 'All players are out', '#ff3050', true); }
     else if (reason === 'busted') { this.audio.busted(); this.notify('BUSTED', 'You were arrested…', '#ff3050', true); this.radio('Suspect is in custody. Good work everyone.'); }
     else if (reason === 'wrecked' || reason === 'wrecked_cop') { this.audio.busted(); this.notify('WRECKED', 'Vehicle wrecked', '#ff3050', true); }
@@ -1280,14 +1424,53 @@ export class Game {
     const fp = own && (this.rig.mode === 'cockpit' || this.rig.mode === 'hood') && !this.rig.cine;
     if (pc && !fp && pc.pos.distanceTo(this.camera.position) < 150) {
       L[0].position.set(pc.pos.x, pc.pos.y + (own ? 3 : 2), pc.pos.z); L[1].position.copy(L[0].position);
-      const k = own ? 0.45 : 1;
-      L[0].intensity = pc.flashA ? 40 * k : 0; L[1].intensity = pc.flashB ? 55 * k : 0;
+      const k = own ? 0.55 : 1.15;
+      L[0].intensity = pc.flashA ? 70 * k : 0; L[1].intensity = pc.flashB ? 85 * k : 0;
     } else { L[0].intensity = L[1].intensity = 0; }
-    // player headlight
+    // player headlights — dual beams + flood + body fill; much stronger at night
+    const night = !!(MAPS[this.world.mapId] && MAPS[this.world.mapId].night);
+    const q = this.settings.quality ?? 1;
     const fx = Math.sin(pl.yaw), fz = Math.cos(pl.yaw);
-    this.headlight.intensity = 60;
-    this.headlight.position.set(pl.pos.x + fx * 2.2, pl.pos.y + 0.8, pl.pos.z + fz * 2.2);
-    this.headlight.target.position.set(pl.pos.x + fx * 30, pl.pos.y - 1, pl.pos.z + fz * 30);
+    const rx = fz, rz = -fx; // right vector
+    const y = pl.pos.y + 0.72;
+    const nose = 2.05;
+    const aim = 38;
+    // Low: one spot + fill. Med: dual spots, no flood. High: full rig.
+    const useDual = q >= 1, useFlood = q >= 2;
+    for (let i = 0; i < 2; i++) {
+      const sx = i === 0 ? -0.55 : 0.55;
+      const Lh = this.headlights[i];
+      const on = i === 0 || useDual;
+      Lh.intensity = on ? (night ? (q === 0 ? 70 : 100) : (q === 0 ? 10 : 16)) : 0;
+      if (on) {
+        Lh.position.set(pl.pos.x + fx * nose + rx * sx, y, pl.pos.z + fz * nose + rz * sx);
+        Lh.target.position.set(pl.pos.x + fx * aim + rx * sx * 0.35, pl.pos.y - 0.6, pl.pos.z + fz * aim + rz * sx * 0.35);
+      }
+    }
+    this.headFlood.intensity = useFlood ? (night ? 42 : 7) : 0;
+    if (useFlood) {
+      this.headFlood.position.set(pl.pos.x + fx * 1.6, y + 0.1, pl.pos.z + fz * 1.6);
+      this.headFlood.target.position.set(pl.pos.x + fx * 22, pl.pos.y - 1.4, pl.pos.z + fz * 22);
+    }
+    this.headFill.intensity = night ? (q === 0 ? 4 : 7) : (q === 0 ? 0.8 : 1.4);
+    this.headFill.position.set(pl.pos.x + fx * 1.4, pl.pos.y + 0.55, pl.pos.z + fz * 1.4);
+    const braking = pl.input && pl.input.brake > 0.1 && pl.vF > 1;
+    this.brakeGlow.intensity = q === 0 ? 0 : (braking ? (night ? 24 : 5) : (night ? 4 : 0));
+    this.brakeGlow.position.set(pl.pos.x - fx * 2.1, pl.pos.y + 0.55, pl.pos.z - fz * 2.1);
+    // volumetric beam volumes — skip on Low
+    const bg = this.beamGroup;
+    if (bg) {
+      bg.visible = q > 0;
+      if (q > 0) {
+        bg.position.set(pl.pos.x, pl.pos.y + 0.65, pl.pos.z);
+        bg.rotation.y = pl.yaw;
+        const op = night ? 0.65 : 0.1;
+        bg.traverse((o) => {
+          if (o.isMesh && o.material) o.material.opacity = op;
+          if (o.isSprite && o.material) o.material.opacity = night ? 0.42 : 0.07;
+        });
+      }
+    }
     // siren edge glow on screen when close
     let near = 0, fl = 0;
     for (const c of cops.slice(0, 1)) { const d = c.pos.distanceTo(pl.pos); near = clamp(1 - d / 25, 0, 1); fl = c.flashA ? 1 : c.flashB ? -1 : 0; }
@@ -1319,7 +1502,11 @@ export class Game {
       const d = Math.sqrt(d2) || 1;
       const vrel = ((c.vel.x - pl.vel.x) * dx + (c.vel.y - pl.vel.y) * dz) / d;
       const pan = (dx * -camR.z + dz * camR.x) / d;
-      others.push({ d, gain: clamp(1 - d / 130, 0, 1) ** 1.7, vrel, pan: -pan, rpm: c.rpm || 0.35, thr: c.input?.throttle ?? 0.5, kind: c.spec.kind });
+      others.push({
+        d, gain: clamp(1 - d / 130, 0, 1) ** 1.7, vrel, pan: -pan,
+        rpm: c.rpm || 0.35, thr: c.input?.throttle ?? 0.5,
+        kind: c.spec.kind, carId: c.spec.id,
+      });
     }
     others.sort((x, y) => x.d - y.d);
     const fp = (this.rig.mode === 'cockpit' || this.rig.mode === 'hood') && !this.rig.cine;
@@ -1329,16 +1516,23 @@ export class Game {
       speed: pl.speed, vF: pl.vF, gear: pl.gear, shiftTimer: pl.shiftTimer || 0,
       skid: pl.skidAmt || 0, slip: Math.abs(pl.slip || 0), drifting: pl.drifting,
       offroad: pl.offroad && pl.grounded, grounded: pl.grounded, flat: pl.flatTimer > 0,
-      nitro: pl.nitroActive, shifted: pl.shifted, kind: pl.spec.kind, fp, sirens: sir, others: others.slice(0, 4),
+      nitro: pl.nitroActive, shifted: pl.shifted, kind: pl.spec.kind, carId: pl.spec.id,
+      fp, sirens: sir, others: others.slice(0, 4),
     });
     pl.shifted = 0;
-    // music intensity
+    // music intensity — chase / heat drive the drama bed; escape cools it
     if (a.music && this.state === 'playing') {
       let lvl = 1;
-      if (this.mode === 'cop') lvl = 2 + (this.raceTime > 60 ? 1 : 0);
-      else if (this.pursuit) lvl = this.heat >= 3 ? 3 : 2;
+      if (this.mode === 'cop') lvl = this.bustedRacers >= 2 ? 3 : 2;
+      else if (this.pursuit) {
+        if (this.mode === 'free' && this.lastSeen > 6) lvl = 1; // losing them: music drops
+        else lvl = this.heat >= 4 ? 3 : this.heat >= 2 ? 2 : 1;
+        if (this.heat >= 5 || (pl.nitroActive && this.heat >= 3)) lvl = 3;
+      } else if (pl.speed > 60) lvl = 2;
       a.music.setLevel(lvl);
+      a.setDrama?.(lvl, this.pursuit ? this.heat : 0);
     }
+    this.feel.update(dt);
   }
 }
 

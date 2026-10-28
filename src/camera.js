@@ -25,6 +25,7 @@ export class CameraRig {
     this.orbitT = 0;
     // mouse look offsets (radians) on top of the automatic camera direction
     this.lookYaw = 0; this.lookPitch = 0; this.lookIdle = 0;
+    this.fovKick = 0; // arcade event FOV punch (from Feel director)
   }
   get mode() { return CAM_MODES[this.modeIndex].id; }
   cycle() { this.modeIndex = (this.modeIndex + 1) % CAM_MODES.length; this.snap = true; this.resetLook(); return CAM_MODES[this.modeIndex]; }
@@ -55,6 +56,8 @@ export class CameraRig {
     if (car.interior) car.interior.group.visible = fp;
     const parts = car.model.parts;
     for (let i = 0; i < 2; i++) if (parts[i]) parts[i].visible = !fp;
+    // GLB exteriors tagged cockpitHide (body shell / roof) — hide in 1st person so the eye isn't inside opaque panels
+    if (car.model.glb) car.model.body.traverse((o) => { if (o.isMesh && o.userData.cockpitHide) o.visible = !fp; });
     // hide siren sprites / heads in cockpit to avoid glare
     for (const h of car.model.heads) h.visible = !fp;
   }
@@ -70,7 +73,8 @@ export class CameraRig {
     const snap = this.snap; this.snap = false;
     const k = snap ? 1000 : 1;
     let fovTarget = s.fov;
-    if (s.speedFx) fovTarget += clamp((speed - 20) / 70, 0, 1) * 9 + (car.nitroActive ? 5 : 0);
+    if (s.speedFx) fovTarget += clamp((speed - 20) / 70, 0, 1) * 12 + (car.nitroActive ? 7 : 0) + this.fovKick;
+    this.fovKick = damp(this.fovKick, 0, 5.5, dt);
     const mode = this.mode;
     this.updateLook(dt);
     if (mode === 'chase' || mode === 'far') {
@@ -78,9 +82,11 @@ export class CameraRig {
       let tYaw = car.yaw;
       if (speed > 5) { const vy = Math.atan2(car.vel.x, car.vel.y); if (car.vF > 0) tYaw = car.yaw + wrapAngle(vy - car.yaw) * 0.45; }
       if (this.lookBack) tYaw += Math.PI;
-      this.yaw = snap ? tYaw : dampAngle(this.yaw, tYaw, this.lookBack ? 30 : 4.2, dt);
+      // snappier yaw follow under nitro / kick so boosts feel committed
+      const yawFollow = this.lookBack ? 30 : (car.nitroActive || this.fovKick > 2 ? 6.2 : 4.2);
+      this.yaw = snap ? tYaw : dampAngle(this.yaw, tYaw, yawFollow, dt);
       const far = mode === 'far';
-      const dist = (far ? 9.5 : 6.3) + clamp(speed * 0.012, 0, 1.0);
+      const dist = (far ? 9.5 : 6.3) + clamp(speed * 0.014, 0, 1.35) + (car.nitroActive ? 0.45 : 0);
       const h = far ? 3.4 : 2.05;
       // mouse look orbits the camera around the car
       const oYaw = this.yaw + this.lookYaw;
@@ -99,17 +105,20 @@ export class CameraRig {
     } else {
       const p = car.model.profile;
       let lx, ly, lz;
+      const isHood = mode === 'hood';
       if (mode === 'cockpit' && p.eye) { lx = p.eye.x; ly = p.eye.y; lz = p.eye.z; fovTarget += 6; }
-      else if (mode === 'cockpit') { lx = 0.38; ly = p.belt + (p.roofH - p.belt) * 0.62; lz = p.roofF - 0.4; fovTarget += 6; }
-      else { lx = 0; ly = (p.hoodFront || 0.9) + 0.3; lz = p.L / 2 - 0.42; fovTarget += 4; }
+      else if (mode === 'cockpit') { lx = 0.38; ly = p.belt + (p.roofH - p.belt) * 0.35; lz = Math.max(p.roofF - 0.15, p.L * 0.05); fovTarget += 6; }
+      else if (p.hoodEye) { lx = p.hoodEye.x; ly = p.hoodEye.y; lz = p.hoodEye.z; fovTarget += 4; }
+      else { lx = 0; ly = (p.hoodFront || 0.9) + 0.18; lz = p.L / 2 - 0.55; fovTarget += 4; }
       // world pos using yaw + damped pitch, no roll (stable horizon)
       const tp = car.pitch * 0.5 + car.bodyPitch * 0.3;
       this.pitch = snap ? tp : damp(this.pitch, tp, 6, dt);
       const cy = Math.cos(car.yaw), sy = Math.sin(car.yaw);
-      // local -> world (yaw only, then pitch small)
+      // local -> world (yaw). Pitch coupling uses a short lever so hood cams (lz ~ 2 m) don't dive into the asphalt.
+      const pitchArm = isHood ? Math.min(Math.abs(lz), 0.55) * Math.sign(lz || 1) : lz;
       const wx = car.pos.x + lx * cy + lz * sy;
       const wz = car.pos.z - lx * sy + lz * cy;
-      const wy = car.pos.y + ly - lz * Math.sin(this.pitch);
+      const wy = car.pos.y + ly - pitchArm * Math.sin(this.pitch);
       cam.position.set(wx, wy, wz);
       let yawL = car.yaw + clamp(car.angVel * 0.12, -0.2, 0.2);
       if (this.lookBack) yawL += Math.PI;

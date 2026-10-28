@@ -51,20 +51,20 @@ for (const n of root.listNodes()) {
   }
   n.setMesh(null); scene.removeChild(n); n.dispose();
 }
-const WR = LO ? 0.2 : 0.4;
+const WR = LO ? 0.14 : 0.28;
 for (const [key, prims] of Object.entries(corners)) {
   const wn = doc.createNode('wheel_' + key); const wm = doc.createMesh('w_' + key);
-  for (const p of prims) { simplify(p, WR, 250); wm.addPrimitive(p); } wn.setMesh(wm); scene.addChild(wn);
+  for (const p of prims) { simplify(p, WR, 200); wm.addPrimitive(p); } wn.setMesh(wm); scene.addChild(wn);
   console.log('wheel', key, 'parts', prims.length, 'tris', Math.round(prims.reduce((a, p) => a + tris(p), 0)));
 }
 // ---- 4. triangle budget per part type ----
 const DETAIL = /^(interior|misc_s|steeringwheel|chassis|NYAlights|belt|rollcage|extra|W5|hub_)/i;
-const DROP_LO = /^(interior|misc_s|steeringwheel|rollcage|belt)/i;
+const DROP_INT = /^(interior|misc_s|steeringwheel|rollcage|belt)/i; // cabin clutter: drop on BOTH lods (cockpit is separate)
 const BODY = /^(bodyshell|bonnet|door_|boot|bumper|nyagt3rs_a|Object|brakelight|plastic|carbon)/i;
 for (const n of root.listNodes()) {
   if (!n.getMesh() || /^wheel_/.test(n.getName())) continue;
-  if (LO && DROP_LO.test(n.getName())) { n.setMesh(null); scene.removeChild(n); n.dispose(); continue; }
-  const r = DETAIL.test(n.getName()) ? (LO ? 0.1 : 0.14) : BODY.test(n.getName()) ? (LO ? 0.12 : 0.36) : (LO ? 0.12 : 0.3);
+  if (DROP_INT.test(n.getName())) { n.setMesh(null); scene.removeChild(n); n.dispose(); continue; }
+  const r = DETAIL.test(n.getName()) ? (LO ? 0.08 : 0.12) : BODY.test(n.getName()) ? (LO ? 0.1 : 0.28) : (LO ? 0.1 : 0.22);
   for (const p of n.getMesh().listPrimitives()) simplify(p, r);
 }
 // ---- 5. materials: cut-out instead of blend where the surface is opaque ----

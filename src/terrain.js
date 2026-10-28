@@ -37,6 +37,26 @@ export function rawHeight(x, z, mapId = currentMap) {
     h = lerp(h, 4.2, odaiba);
     return h * mask;
   }
+  if (mapId === 'stuttgart') {
+    // Stuttgart: Kessel basin flat in the city, vineyard / Schwäbische Alb hills all around, Neckar river corridor NE→SE.
+    const maskSt = smoothstep(620, 1000, dCity);
+    let h = (fbm(n1, x / 680, z / 680, 4) * 48 + 18 + fbm(n2, x / 190, z / 190, 3) * 10) * maskSt;
+    // Surrounding hills (west Solitude / Birkenkopf stronger, south Alb foothills)
+    const ring = smoothstep(980, 1650, dCity);
+    const hillShape = 0.55 + 0.45 * fbm(n3, x / 280, z / 280, 4);
+    const westBoost = smoothstep(-500, -1400, x) * 0.55;
+    const southBoost = smoothstep(700, 1600, z) * 0.4;
+    h += ring * (95 + 110 * hillShape) * (1 + westBoost + southBoost);
+    // Gentle vineyard terraces on mid slopes
+    h += smoothstep(70, 140, h) * (1 - smoothstep(200, 260, h)) * fbm(n4, x / 90, z / 90, 3) * 8;
+    // Neckar: snaking valley from NW through NE then SE — carves a water channel outside the hard city grid
+    const neckarZ = -80 + 0.22 * x + 55 * Math.sin(x / 210) + 28 * Math.cos(x / 95);
+    const riverDist = Math.abs(z - neckarZ);
+    const alongRiver = smoothstep(-200, 200, x + z * 0.15) * (1 - smoothstep(1500, 1850, Math.hypot(x, z)));
+    const river = (1 - smoothstep(28, 95, riverDist)) * alongRiver * smoothstep(520, 780, dCity);
+    h = lerp(h, -10, river);
+    return h;
+  }
   const maskCoast = smoothstep(680, 1050, dCity);
   let h = (fbm(n1, x / 750, z / 750, 4) * 60 + 22 + fbm(n2, x / 210, z / 210, 3) * 9) * maskCoast;
   // mountains on west/north/south borders
@@ -150,7 +170,9 @@ export class HeightField {
     if (cd <= 612) t = Math.max(t, CITY_PLANE);
     const arr = this.rgrid && this.rgrid.get(this.rkey(Math.floor(x / this.rcs), Math.floor(z / this.rcs)));
     if (!arr) return t;
-    let best = 1e9, bh = 0, maxOnRoadH = -1e9;
+    // Prefer the laterally nearest ribbon only. Taking max height across overlaps (ramps / parallel
+    // roads) pinned cars to a higher surface then snapped them down → hopping on the highway.
+    let best = 1e9, bh = 0;
     for (const sg of arr) {
       const dx = sg.b.x - sg.a.x, dz = sg.b.z - sg.a.z; const l2 = dx * dx + dz * dz || 1e-6;
       let u = ((x - sg.a.x) * dx + (z - sg.a.z) * dz) / l2; u = u < 0 ? 0 : u > 1 ? 1 : u;
@@ -159,10 +181,8 @@ export class HeightField {
       let sh = sg.a.h + (sg.b.h - sg.a.h) * u;
       const bk = sg.a.bank;
       if (bk !== undefined || sg.b.bank !== undefined) { const o = (-px * dz + pz * dx) / Math.sqrt(l2); sh += ((bk || 0) + ((sg.b.bank || 0) - (bk || 0)) * u) * (o < -sg.hw ? -sg.hw : o > sg.hw ? sg.hw : o); }
-      if (d <= 4.2 && sh > maxOnRoadH) maxOnRoadH = sh;
       if (d < best) { best = d; bh = sh; }
     }
-    if (maxOnRoadH > -1e8) bh = Math.max(bh, maxOnRoadH);
     if (best > 5.5) return t;
     const roadY = bh + 0.13; // ribbon tops sit at +0.10..0.14
     if (best <= 0.6) return roadY;

@@ -11,6 +11,7 @@ import { HUD } from './hud.js';
 import { Game, fmtTime } from './game.js';
 import { PLAYER_CARS } from './car.js';
 import { clamp, lerp } from './util.js';
+import { MS_TO_KMH } from './units.js';
 import { Net } from './net.js';
 import { loadCarAssets } from './carAssets.js';
 import { loadEnvAssets } from './envAssets.js';
@@ -51,19 +52,29 @@ const _sunV = new THREE.Vector3();
 let app = 'loading'; // loading | title | menu | garage | game | paused | result
 let selMode = 'race', selCar = 0;
 
+let mapSwitching = null;
 async function switchMap(id, silent = false) {
-  if (!MAPS[id] || (id === world.mapId && !silent)) { refreshMapUI(); return; }
+  if (!MAPS[id]) { refreshMapUI(); return; }
+  // Rebuild if empty/corrupt (mapId set but clearWorld left an empty root after a failed build)
+  if (id === world.mapId && !silent && world.root.children.length > 50) { refreshMapUI(); return; }
+  if (mapSwitching) await mapSwitching;
   const load = $('loading'), bar = $('load-bar'), txt = $('load-text');
   load.classList.remove('hidden');
   const wasApp = app; app = 'loading';
-  await new Promise((r) => setTimeout(r, 50));
-  game.clear(); game._route = null; game.demo = false;
-  await world.setMap(id, (p, t) => { bar.style.width = `${Math.round(p * 100)}%`; txt.textContent = MAPS[id].name + ' - ' + t; });
-  selMap = id; try { localStorage.setItem('redline-map', id); } catch (e) { /* ignore */ }
-  renderer.toneMappingExposure = MAPS[id].exposure;
-  applyQuality();
-  game.start('demo'); for (let i = 0; i < 3; i++) game.update(1 / 60);
-  renderer.compile(scene, camera);
+  const job = (async () => {
+    await new Promise((r) => setTimeout(r, 50));
+    game.clear(); game._route = null; game._routeMap = null; game.demo = false;
+    await world.setMap(id, (p, t) => { bar.style.width = `${Math.round(p * 100)}%`; txt.textContent = MAPS[id].name + ' - ' + t; });
+    selMap = id; try { localStorage.setItem('redline-map', id); } catch (e) { /* ignore */ }
+    renderer.toneMappingExposure = MAPS[id].exposure;
+    applyQuality();
+    if (wasApp !== 'garage' && wasApp !== 'game') {
+      game.start('demo'); for (let i = 0; i < 3; i++) game.update(1 / 60);
+    }
+    renderer.compile(scene, camera);
+  })();
+  mapSwitching = job;
+  try { await job; } finally { if (mapSwitching === job) mapSwitching = null; }
   load.classList.add('hidden');
   app = wasApp === 'loading' ? 'menu' : wasApp;
   demoShotT = 0;
@@ -73,20 +84,33 @@ function refreshMapUI() {
   document.querySelectorAll('.mapbtn').forEach((b) => b.classList.toggle('on', b.dataset.map === world.mapId));
   const n = $('map-note'); if (n) n.textContent = MAPS[world.mapId].jp + ' - ' + MAPS[world.mapId].desc + (net.connected ? ' (online: the host\'s map is used)' : '');
 }
-document.querySelectorAll('.mapbtn').forEach((b) => { b.onclick = () => { audio.click(); if (!waiting) switchMap(b.dataset.map); }; });
+document.querySelectorAll('.mapbtn').forEach((b) => {
+  b.onclick = () => {
+    audio.click();
+    if (waiting || mapSwitching) return;
+    selMap = b.dataset.map;
+    document.querySelectorAll('.mapbtn').forEach((x) => x.classList.toggle('on', x.dataset.map === selMap));
+    switchMap(b.dataset.map);
+  };
+});
 
 function applyQuality() {
   const q = settings.quality;
   const dpr = window.devicePixelRatio || 1;
-  renderer.setPixelRatio(q === 0 ? Math.min(dpr, 1) * 0.75 : q === 1 ? Math.min(dpr, 1.25) : Math.min(dpr, 2));
-  renderer.shadowMap.enabled = true;
+  // Low: 0.75×, Med: ≤1.25, High: ≤1.5 (2× was mostly waste on 1080p+ for this scene)
+  renderer.setPixelRatio(q === 0 ? Math.min(dpr, 1) * 0.75 : q === 1 ? Math.min(dpr, 1.25) : Math.min(dpr, 1.5));
+  renderer.shadowMap.enabled = q > 0;
+  renderer.shadowMap.type = q >= 2 ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
   if (world.sunLight) {
-    const ms = q === 0 ? 1024 : 2048;
+    world.sunLight.castShadow = q > 0;
+    const ms = q >= 2 ? 2048 : 1024;
     if (world.sunLight.shadow.mapSize.x !== ms) { world.sunLight.shadow.mapSize.set(ms, ms); if (world.sunLight.shadow.map) { world.sunLight.shadow.map.dispose(); world.sunLight.shadow.map = null; } }
   }
+  // Tree hi-LOD radius: full foliage cards are expensive in the shadow + opaque passes
+  world.treeLodDist = q === 0 ? 160 : q === 1 ? 240 : 330;
   if (post) {
     post.setQuality(q);
-    const samples = q === 0 ? 0 : 4;
+    const samples = q >= 2 ? 4 : 0; // MSAA only on High; Med/Low skip the resolve cost
     for (const rt of [post.composer.renderTarget1, post.composer.renderTarget2]) { if (rt.samples !== samples) { rt.samples = samples; rt.dispose(); } }
     onResize();
   }
@@ -111,10 +135,19 @@ async function boot() {
   game.onResult = showResult;
   refreshMapUI();
   window.__rp = { game, switchMap, rig, world, camera, post, input, settings, renderer, scene };
-  // warm up: start demo so materials compile
+  // warm up: demo + every garage car (custom GLBs hitch on first shader/GPU upload otherwise)
   game.start('demo');
   for (let i = 0; i < 3; i++) { game.update(1 / 60); }
-  renderer.compile(scene, camera);
+  txt.textContent = 'WARMING UP CARS';
+  for (let i = 0; i < PLAYER_CARS.length; i++) {
+    bar.style.width = `${Math.round((i / PLAYER_CARS.length) * 100)}%`;
+    for (const police of [false, true]) {
+      const c = game.addCar(PLAYER_CARS[i], { role: 'player', police });
+      c.place(0, 0, -40 - i * 8, 0);
+      renderer.compile(scene, camera); // scene (not just the car) so lights are in the compile pass
+      game.removeCar(c);
+    }
+  }
   bar.style.width = '100%'; txt.textContent = 'READY';
   await new Promise((r) => setTimeout(r, 250));
   $('loading').classList.add('hidden');
@@ -202,12 +235,22 @@ function loop(now) {
   // post fx uniforms
   const u = post.u;
   const inGame = app === 'game' && pl && !game.demo;
+  const feel = game?.feel;
   const sp = inGame ? pl.speed : 0;
-  u.uSpeed.value = lerp(u.uSpeed.value, settings.speedFx && inGame ? clamp((sp - 35) / 55, 0, 1) * (rig.mode === 'cockpit' || rig.mode === 'hood' ? 0.6 : 1) : 0, 0.1);
-  u.uBlur.value = settings.speedFx ? 1 : 0;
-  nitroFx = lerp(nitroFx, inGame && pl.nitroActive ? 1 : 0, 0.12);
-  u.uNitro.value = nitroFx;
-  post.bloom.strength = 0.5 + 0.3 * nitroFx;
+  const speedAmt = settings.speedFx && inGame
+    ? clamp((sp - 28) / 55, 0, 1) * (rig.mode === 'cockpit' || rig.mode === 'hood' ? 0.65 : 1) + (feel?.speedBias || 0)
+    : 0;
+  u.uSpeed.value = lerp(u.uSpeed.value, clamp(speedAmt, 0, 1.35), 0.14);
+  u.uBlur.value = settings.speedFx ? 1 + (feel?.blurKick || 0) : 0;
+  nitroFx = lerp(nitroFx, inGame && pl.nitroActive ? 1 : 0, 0.14);
+  u.uNitro.value = Math.min(1.4, nitroFx + (feel?.nitroBoost || 0));
+  {
+    const night = !!(MAPS[world.mapId] && MAPS[world.mapId].night);
+    u.uNight.value = night ? 1 : 0;
+    post.bloom.threshold = night ? 0.55 : 0.92;
+    post.bloom.radius = night ? 0.72 : 0.5;
+    post.bloom.strength = (night ? 0.78 : 0.5) + 0.28 * nitroFx + (feel?.bloomKick || 0);
+  }
   { // sun position on screen for the shaft pass (only while the sun is in front of the camera)
     const sd = game.world.sunDir; _sunV.copy(camera.position).addScaledVector(sd, 2000).project(camera);
     const vis = _sunV.z < 1 && Math.abs(_sunV.x) < 1.6 && Math.abs(_sunV.y) < 1.6 ? 1 : 0;
@@ -217,7 +260,9 @@ function loop(now) {
   u.uDamage.value = inGame ? Math.max(hud.dmgFlash * 0.8, low) : 0;
   const sg = inGame && game.sirenGlow;
   u.uSiren.value.set(sg ? sg.r : 0, sg ? sg.b : 0, sg ? sg.a : 0);
-  post.mb.strength = settings.speedFx && (app === 'game' || app === 'paused' ? !!pl && !game.demo : false) && app !== 'paused' ? 1 : 0;
+  post.mb.strength = settings.speedFx && (app === 'game' || app === 'paused' ? !!pl && !game.demo : false) && app !== 'paused'
+    ? 1 + Math.min(0.55, feel?.blurKick || 0)
+    : 0;
   if (pl) { post.mb.u.uCar.value.set(pl.pos.x, pl.pos.y + 0.8, pl.pos.z); post.mb.u.uCarR.value = Math.max(pl.dims.L * 0.5, pl.dims.W) + 0.9; }
   u.uMB.value = post.mb.enabled && post.mb.strength ? 1 : 0;
   post.draw(dt);
@@ -374,6 +419,8 @@ function backToMenu() {
   audio.click();
   if (game.multi) { game.multi = null; }
   leaveRoom();
+  flushGaragePool();
+  applyQuality(); // restore shadows if we left the garage
   hud.show(false);
   app = 'menu'; show('menu');
   game.start('demo'); demoShotT = 0;
@@ -382,27 +429,41 @@ function backToMenu() {
 }
 
 let garageCar = null, garageA = 0;
+const garagePool = new Map(); // keep built previews between ←/→ so custom GLBs aren't rebuilt every click
+function flushGaragePool() { garagePool.clear(); garageCar = null; }
 function enterGarage(mode) {
   selMode = mode; audio.click();
   app = 'garage'; show('garage');
   $('garage-mode').textContent = { race: 'HOT PURSUIT RACE', cop: 'INTERCEPTOR', free: 'FREE RUN' }[mode];
   $('garage-sub').textContent = { race: 'Join as a racer. Shake off the police and finish 1st.', cop: 'Roll out as the police. Bust all 4 illegal racers.', free: 'Roam the huge map freely. If a patrol spots you, escape.' }[mode];
+  flushGaragePool();
   game.clear();
+  // custom GLBs (GT3 ~286 meshes, Mini ~251) hitch hard when each new preview rebuilds + fills the shadow map
+  renderer.shadowMap.enabled = false;
   audio.silence();
   selectCar(selCar);
 }
 function selectCar(i) {
   selCar = (i + PLAYER_CARS.length) % PLAYER_CARS.length;
-  if (garageCar) { game.removeCar(garageCar); }
-  const spec = PLAYER_CARS[selCar];
-  garageCar = game.addCar(spec, { role: 'player', police: selMode === 'cop' });
-  garageCar.place(0, 180, 0.6, 0);
-  garageCar.sirenOn = true;
+  const police = selMode === 'cop';
+  if (garageCar) garageCar.model.root.visible = false;
+  const key = selCar + (police ? ':p' : '');
+  let c = garagePool.get(key);
+  if (!c) {
+    c = game.addCar(PLAYER_CARS[selCar], { role: 'player', police });
+    c.model.root.traverse((o) => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; } });
+    garagePool.set(key, c);
+  }
+  c.model.root.visible = true;
+  c.place(0, 180, 0.6, 0);
+  c.sirenOn = true;
+  garageCar = c;
   game.player = null;
-  $('car-name').textContent = (selMode === 'cop' ? 'POLICE ' : '') + spec.name;
+  const spec = PLAYER_CARS[selCar];
+  $('car-name').textContent = (police ? 'POLICE ' : '') + spec.name;
   $('car-desc').textContent = spec.desc;
   const stats = [['Top speed', spec.top / 96], ['Acceleration', spec.accel / 19], ['Handling', (spec.grip * spec.steer) / 9.5], ['Durability / Ramming', spec.armor * spec.mass / 2.2]];
-  $('car-stats').innerHTML = stats.map(([n, v]) => `<div class="st"><span>${n}</span><div class="sb"><i style="width:${Math.round(clamp(v, 0.1, 1) * 100)}%"></i></div></div>`).join('') + `<div class="st topspeed"><span>TOP SPEED</span><b>${Math.round(spec.top * 3.6)} km/h</b></div>`;
+  $('car-stats').innerHTML = stats.map(([n, v]) => `<div class="st"><span>${n}</span><div class="sb"><i style="width:${Math.round(clamp(v, 0.1, 1) * 100)}%"></i></div></div>`).join('') + `<div class="st topspeed"><span>TOP SPEED</span><b>${Math.round(spec.top * MS_TO_KMH)} km/h</b></div>`;
   $('car-idx').textContent = `${selCar + 1} / ${PLAYER_CARS.length}`;
   audio.hover();
 }
@@ -415,13 +476,29 @@ function garageSpin(dt) {
     camera.position.set(p.x + Math.sin(garageA) * r, p.y + 1.5 + Math.sin(garageA * 0.7) * 0.4, p.z + Math.cos(garageA) * r);
     camera.lookAt(p.x, p.y + 0.6, p.z);
     if (camera.fov !== 50) { camera.fov = 50; camera.updateProjectionMatrix(); }
-    game.headlight.intensity = 60;
+    const night = !!(MAPS[world.mapId] && MAPS[world.mapId].night);
     const fx = Math.sin(garageCar.yaw), fz = Math.cos(garageCar.yaw);
-    game.headlight.position.set(p.x + fx * 2.2, p.y + 0.8, p.z + fz * 2.2);
-    game.headlight.target.position.set(p.x + fx * 30, p.y - 1, p.z + fz * 30);
+    const rx = fz, rz = -fx;
+    for (let i = 0; i < 2; i++) {
+      const sx = i === 0 ? -0.55 : 0.55;
+      const Lh = game.headlights[i];
+      Lh.intensity = night ? 70 : 22;
+      Lh.position.set(p.x + fx * 2.05 + rx * sx, p.y + 0.72, p.z + fz * 2.05 + rz * sx);
+      Lh.target.position.set(p.x + fx * 30 + rx * sx * 0.3, p.y - 0.5, p.z + fz * 30 + rz * sx * 0.3);
+    }
+    game.headFlood.intensity = night ? 28 : 8;
+    game.headFlood.position.set(p.x + fx * 1.6, p.y + 0.8, p.z + fz * 1.6);
+    game.headFlood.target.position.set(p.x + fx * 22, p.y - 1, p.z + fz * 22);
+    game.headFill.intensity = night ? 5 : 2;
+    game.headFill.position.set(p.x + fx * 1.2, p.y + 0.55, p.z + fz * 1.2);
+    if (game.beamGroup) {
+      game.beamGroup.visible = true;
+      game.beamGroup.position.set(p.x, p.y + 0.65, p.z);
+      game.beamGroup.rotation.y = garageCar.yaw;
+    }
     if (garageCar.police) {
       const L = game.copLights; L[0].position.set(p.x, p.y + 2, p.z); L[1].position.copy(L[0].position);
-      L[0].intensity = garageCar.flashA ? 30 : 0; L[1].intensity = garageCar.flashB ? 40 : 0;
+      L[0].intensity = garageCar.flashA ? 45 : 0; L[1].intensity = garageCar.flashB ? 55 : 0;
     }
   }
 }
@@ -429,9 +506,15 @@ function startGame() {
   if (net.connected && room) { audio.click(); if (!waiting) { waiting = true; sendReady(); } refreshWait(); return; }
   startLocal();
 }
-function startLocal() {
+async function startLocal() {
   audio.click();
-  garageCar = null;
+  if (mapSwitching) await mapSwitching;
+  // Guarantee the selected map is built before countdown (UI can race ahead of setMap)
+  if (selMap && MAPS[selMap] && (selMap !== world.mapId || world.root.children.length < 50)) {
+    await switchMap(selMap, true);
+  }
+  flushGaragePool();
+  applyQuality(); // restore shadows after garage preview
   show(null);
   hud.show(true);
   app = 'game';

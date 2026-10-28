@@ -2,17 +2,19 @@
 import { clamp, wrapAngle, lerp } from './util.js';
 import { projectOnRoute, pointAtDist } from './roads.js';
 
-const P = {}; const P2 = {};
+const P = {}; const P2 = {}; const P3 = {};
 
-function steerToward(car, tx, tz, gain = 2.6) {
+function steerToward(car, tx, tz, gain = 2.1) {
   const desired = Math.atan2(tx - car.pos.x, tz - car.pos.z);
   const diff = wrapAngle(desired - car.yaw);
-  return { steer: clamp(diff * gain, -1, 1), diff };
+  // car.js already scales max wheel angle to the physical grip limit at current speed; map heading error cleanly with yaw-rate damping
+  const dampTerm = (car.angVel || 0) * 0.09;
+  return { steer: clamp((diff - dampTerm) * gain, -1, 1), diff };
 }
 function speedControl(car, desired) {
   const v = car.vF;
   if (v < desired - 1) { car.input.throttle = clamp((desired - v) / 6, 0.35, 1); car.input.brake = 0; }
-  else if (v > desired + 4) { car.input.throttle = 0; car.input.brake = clamp((v - desired) / 12, 0.2, 1); }
+  else if (v > desired + 2.5) { car.input.throttle = 0; car.input.brake = clamp((v - desired) / 9, 0.25, 1); }
   else { car.input.throttle = 0.3; car.input.brake = 0; }
 }
 
@@ -37,26 +39,38 @@ function avoidance(car, cars, range = 32) {
   return { push, block };
 }
 
-function curvatureSpeed(route, prog, latA) {
-  const a = pointAtDist(route, prog + 8, P);
-  const ax = a.dx, az = a.dz;
-  let vmax = 999;
-  for (const d of [25, 50, 80, 120, 170]) {
-    const b = pointAtDist(route, prog + 8 + d, P2);
-    const ang = Math.abs(wrapAngle(Math.atan2(b.dx, b.dz) - Math.atan2(ax, az)));
-    if (ang < 0.03) continue;
-    const R = d / ang;
-    // allow braking distance
-    const v = Math.sqrt(latA * R) + d * 0.18;
-    vmax = Math.min(vmax, v);
+function curvatureSpeed(route, prog, latA, carYaw) {
+  const a = pointAtDist(route, prog, P);
+  const ax = carYaw !== undefined ? Math.sin(carYaw) : a.dx;
+  const az = carYaw !== undefined ? Math.cos(carYaw) : a.dz;
+  const baseAng = Math.atan2(ax, az);
+  let vmax = 999, sharpNear = false;
+  for (const d of [8, 16, 26, 40, 60, 85, 115, 150]) {
+    const b = pointAtDist(route, prog + d, P2);
+    const c = pointAtDist(route, prog + d + 12, P3);
+    const ang1 = Math.abs(wrapAngle(Math.atan2(b.dx, b.dz) - baseAng));
+    const localAng = Math.abs(wrapAngle(Math.atan2(c.dx, c.dz) - Math.atan2(b.dx, b.dz)));
+    if (d <= 30 && (ang1 > 0.45 || localAng > 0.45)) sharpNear = true;
+    if (ang1 > 0.03) {
+      const R = Math.max(10, d / ang1);
+      const vc = Math.sqrt(latA * R);
+      const v = Math.sqrt(vc * vc + 2 * 11.5 * Math.max(0, d - 12));
+      vmax = Math.min(vmax, v);
+    }
+    if (localAng > 0.08) {
+      const Rloc = Math.max(10, 12 / localAng);
+      const vc = Math.sqrt(latA * Rloc);
+      const v = Math.sqrt(vc * vc + 2 * 11.5 * Math.max(0, d - 10));
+      vmax = Math.min(vmax, v);
+    }
   }
-  return vmax;
+  return { vmax, sharpNear };
 }
 
 export class RacerAI {
   constructor(car, route, skill = 1) {
     this.car = car; this.route = route; this.skill = skill;
-    this.idx = 0; this.progress = 0; this.lane = (Math.random() - 0.5) * 6; this.laneT = this.lane;
+    this.idx = 0; this.progress = 0; this.lane = (Math.random() - 0.5) * 5; this.laneT = this.lane;
     this.stuck = 0; this.reverseT = 0; this.finished = false;
   }
   update(dt, game) {
@@ -65,18 +79,20 @@ export class RacerAI {
     const pr = projectOnRoute(this.route, car.pos.x, car.pos.z, this.idx, 30);
     this.idx = pr.index; this.progress = pr.dist;
     const sp = car.speed;
-    const look = 10 + sp * 0.5;
+    const { vmax, sharpNear } = curvatureSpeed(this.route, this.progress, car.gripLimit() * 0.82, car.yaw);
+    const look = sharpNear ? clamp(9 + sp * 0.25, 9, 16) : clamp(11 + sp * 0.42, 11, 28);
     const t = pointAtDist(this.route, this.progress + look, P);
     const av = avoidance(car, game.cars);
-    const lim = Math.abs(car.pos.x) < 640 && Math.abs(car.pos.z) < 640 ? 4.5 : 8.5;
-    this.laneT = clamp(this.laneT + av.push * dt * 14, -lim, lim);
-    if (Math.abs(av.push) < 0.01) this.laneT = lerp(this.laneT, clamp(this.lane, -lim, lim), dt * 0.5);
+    const lim = sharpNear ? 2.2 : Math.abs(car.pos.x) < 640 && Math.abs(car.pos.z) < 640 ? 3.8 : 4.8;
+    this.laneT = clamp(this.laneT + av.push * dt * 12, -lim, lim);
+    if (car.offroad || pr.off > 6 || sharpNear) this.laneT = lerp(this.laneT, 0, dt * 4);
+    else if (Math.abs(av.push) < 0.01) this.laneT = lerp(this.laneT, clamp(this.lane, -lim, lim), dt * 0.5);
     const rx = -t.dz, rz = t.dx;
     let tx = t.x + rx * this.laneT, tz = t.z + rz * this.laneT;
-    if (pr.off > 30) { const q = pointAtDist(this.route, this.progress + 8, P2); tx = q.x; tz = q.z; }
-    const s = steerToward(car, tx, tz, 2.4);
+    if (pr.off > 10 || car.offroad) { const q = pointAtDist(this.route, this.progress + 12, P2); tx = q.x; tz = q.z; }
+    const s = steerToward(car, tx, tz, 2.2);
     car.input.steer = s.steer;
-    let desired = Math.min(car.spec.top, curvatureSpeed(this.route, this.progress, car.gripLimit() * 0.8)) * this.skill;
+    let desired = Math.min(car.spec.top, vmax) * this.skill;
     // rubber band relative to player
     const pl = game.player;
     if (game.multi && game.mode === 'free') car.boost = 1;
@@ -145,7 +161,7 @@ export class CopAI {
     }
     let tx, tz, desired;
     const sp = car.speed;
-    if (this.direct || !this.path) {
+    if (this.direct) {
       const lead = clamp(dist / 55, 0, 1.3);
       tx = tg.pos.x + tg.vel.x * lead; tz = tg.pos.z + tg.vel.y * lead;
       if (dist < 16) {
@@ -165,17 +181,26 @@ export class CopAI {
         tx = tg.pos.x + trx * 8 * side; tz = tg.pos.z + trz * 8 * side;
         desired = 14;
       }
-    } else {
+    } else if (this.path) {
       const pr = projectOnRoute(this.path, car.pos.x, car.pos.z, this.pathIdx, 20);
       this.pathIdx = pr.index;
-      const t = pointAtDist(this.path, pr.dist + 10 + sp * 0.45, P);
+      const { vmax, sharpNear } = curvatureSpeed(this.path, pr.dist, car.gripLimit() * 0.82, car.yaw);
+      const t = pointAtDist(this.path, pr.dist + (sharpNear ? 11 : 10 + sp * 0.4), P);
       tx = t.x; tz = t.z;
-      desired = Math.min(car.spec.top, curvatureSpeed(this.path, pr.dist, car.gripLimit() * 0.8));
+      desired = Math.min(car.spec.top, vmax);
       if (pr.dist > this.path.length - 30) this.replan = 0;
+    } else {
+      // No LOS and no A* — drive toward nearest road node by the target (don't cut across terrain)
+      const nav = game.world.nav;
+      const n = nav.nearest(tg.pos.x, tg.pos.z) || nav.nearest(car.pos.x, car.pos.z);
+      tx = n ? n.x : tg.pos.x; tz = n ? n.z : tg.pos.z;
+      desired = Math.min(22, tg.speed + 6);
+      this.replan = Math.min(this.replan, 0.25);
     }
-    const s = steerToward(car, tx, tz, 2.6);
+    const s = steerToward(car, tx, tz, 1.7);
     const av = avoidance(car, game.traffic, 26);
-    car.input.steer = clamp(s.steer + av.push * 0.5, -1, 1);
+    // avoidance.push is a lane-offset cue (left-axis); for steer, flip so we swerve AWAY
+    car.input.steer = clamp(s.steer - av.push * 0.45, -1, 1);
     if (Math.abs(s.diff) > 0.7) desired = Math.min(desired, 16);
     desired = Math.min(desired, car.spec.top * 1.1);
     speedControl(car, desired);
@@ -201,11 +226,11 @@ export class CopAI {
 export class TrafficAI {
   constructor(car, game) {
     this.car = car; this.game = game; this.cur = null; this.next = null; this.prev = null; this.stunned = 0;
-    this.cruise = 14;
+    this.cruise = 14; this.stuck = 0; this.reverseT = 0;
   }
   spawnAt(node, game) {
     const nav = game.world.nav;
-    this.prev = null; this.cur = node;
+    this.prev = null; this.cur = node; this.stuck = 0; this.reverseT = 0;
     const e = node.edges[Math.floor(Math.random() * node.edges.length)];
     this.next = nav.nodes[e.to];
     const dx = this.next.x - node.x, dz = this.next.z - node.z; const l = Math.hypot(dx, dz) || 1;
@@ -221,6 +246,28 @@ export class TrafficAI {
     this.cruise = hw ? 24 + Math.random() * 5 : 19 + Math.random() * 4;
     return hw ? 6.5 : 4.8;
   }
+  pickExit(nav, from, at, inDx, inDz, roll = false) {
+    const opts = at.edges.filter((e) => e.to !== from.id);
+    if (!opts.length) return at.edges[0];
+    // Prefer continuing straight; never pick a near-U-turn when a milder option exists
+    let best = opts[0], bs = -2;
+    for (const e of opts) {
+      const m = nav.nodes[e.to];
+      const ex = m.x - at.x, ez = m.z - at.z; const el = Math.hypot(ex, ez) || 1;
+      const d = (ex * inDx + ez * inDz) / el;
+      if (d > bs) { bs = d; best = e; }
+    }
+    // Only randomize on the actual advance — peeking every frame must stay stable
+    if (roll && opts.length > 1 && Math.random() < 0.28) {
+      const mild = opts.filter((e) => {
+        const m = nav.nodes[e.to];
+        const ex = m.x - at.x, ez = m.z - at.z; const el = Math.hypot(ex, ez) || 1;
+        return (ex * inDx + ez * inDz) / el > 0.15;
+      });
+      if (mild.length) best = mild[Math.floor(Math.random() * mild.length)];
+    }
+    return best;
+  }
   update(dt, game) {
     const car = this.car;
     if (this.stunned > 0) { this.stunned -= dt; car.input.throttle = 0; car.input.brake = 1; car.input.steer = 0; return; }
@@ -229,28 +276,66 @@ export class TrafficAI {
     const c = this.cur, n = this.next;
     let dx = n.x - c.x, dz = n.z - c.z; const l = Math.hypot(dx, dz) || 1; dx /= l; dz /= l;
     const lane = this.lane;
-    const tx = n.x - dz * lane, tz = n.z + dx * lane;
-    const dd = Math.hypot(tx - car.pos.x, tz - car.pos.z);
-    if (dd < 9 || ((tx - car.pos.x) * dx + (tz - car.pos.z) * dz) < 0) {
-      // advance
-      const opts = n.edges.filter((e) => e.to !== c.id);
-      const pick = opts.length ? opts[Math.floor(Math.random() * opts.length)] : n.edges[0];
-      // prefer straight
-      let best = pick;
-      if (opts.length > 1 && Math.random() < 0.65) {
-        let bs = -2;
-        for (const e of opts) { const m = nav.nodes[e.to]; const ex = m.x - n.x, ez = m.z - n.z; const el = Math.hypot(ex, ez) || 1; const d = (ex * dx + ez * dz) / el; if (d > bs) { bs = d; best = e; } }
-      }
+    // Distance along the centreline (not the lane point) — lane offset was triggering early U-turns
+    const along = (car.pos.x - c.x) * dx + (car.pos.z - c.z) * dz;
+    const latOff = (car.pos.x - c.x) * (-dz) + (car.pos.z - c.z) * dx;
+    if (along > l - 6 || (along > l * 0.55 && ((n.x - car.pos.x) * dx + (n.z - car.pos.z) * dz) < 0)) {
+      const best = this.pickExit(nav, c, n, dx, dz, true);
       this.prev = c; this.cur = n; this.next = nav.nodes[best.to]; this.lane = this.laneFor(n);
     }
-    // steer to look-ahead point on lane
-    const s = steerToward(car, tx, tz, 2.0);
-    car.input.steer = s.steer;
+    // Recompute after possible advance
+    const c2 = this.cur, n2 = this.next;
+    let dx2 = n2.x - c2.x, dz2 = n2.z - c2.z; const l2 = Math.hypot(dx2, dz2) || 1; dx2 /= l2; dz2 /= l2;
+    const along2 = (car.pos.x - c2.x) * dx2 + (car.pos.z - c2.z) * dz2;
+    const look = 12 + car.speed * 0.55;
+    let ax = c2.x + dx2 * clamp(along2 + look, 0, l2);
+    let az = c2.z + dz2 * clamp(along2 + look, 0, l2);
+    // Peek past the upcoming node so we don't slam the apex at full cruise
+    let turnDot = 1;
+    if (along2 + look > l2 - 1) {
+      const exit = this.pickExit(nav, c2, n2, dx2, dz2);
+      const m = nav.nodes[exit.to];
+      const ex = m.x - n2.x, ez = m.z - n2.z; const el = Math.hypot(ex, ez) || 1;
+      turnDot = (ex * dx2 + ez * dz2) / el;
+      const over = along2 + look - l2;
+      ax = n2.x + (ex / el) * over;
+      az = n2.z + (ez / el) * over;
+    }
+    const tx = ax - dz2 * this.lane, tz = az + dx2 * this.lane;
+    const dd = Math.hypot(tx - car.pos.x, tz - car.pos.z);
+    const s = steerToward(car, tx, tz, 1.25);
+    // Rate-limit steer so traffic doesn't twitch
+    car.input.steer = lerp(car.input.steer || 0, s.steer, clamp(dt * 6, 0, 1));
     let desired = this.cruise;
-    if (Math.abs(s.diff) > 0.35) desired = Math.min(desired, 9);
+    if (turnDot < 0.85) desired = Math.min(desired, 7 + 10 * Math.max(0, turnDot));
+    if (Math.abs(s.diff) > 0.3) desired = Math.min(desired, 8);
+    if (Math.abs(latOff - this.lane) > 6 || dd > 28) desired = Math.min(desired, 10);
     const av = avoidance(car, game.carsNear(car, 30), 22);
     if (av.block < 20) desired = Math.min(desired, Math.max(0, (av.block - 7) * 1.2));
+    // Stuck: reverse briefly instead of spinning in place at full lock
+    if (this.reverseT > 0) {
+      this.reverseT -= dt;
+      car.input.throttle = 0; car.input.brake = 1; car.input.steer = -Math.sign(s.steer || 1) * 0.7; car.input.handbrake = 0; car.input.nitro = 0;
+      return;
+    }
+    if (car.speed < 2.2 && (car.input.throttle > 0.2 || Math.abs(s.diff) > 0.7)) this.stuck += dt;
+    else this.stuck = Math.max(0, this.stuck - dt * 2);
+    if (this.stuck > 1.5) {
+      this.reverseT = 1.0; this.stuck = 0;
+      this.stuckCount = (this.stuckCount || 0) + 1;
+      if (this.stuckCount > 2) {
+        this.stuckCount = 0;
+        const nn = nav.nearest(car.pos.x, car.pos.z);
+        if (nn) this.spawnAt(nn, game);
+        return;
+      }
+    }
     speedControl(car, desired);
     car.input.handbrake = 0; car.input.nitro = 0;
+    // Recover if we drifted way off the graph (loft / bounce / collision)
+    if (dd > 80 || Math.abs(latOff) > 40) {
+      this.offT = (this.offT || 0) + dt;
+      if (this.offT > 2.2) { this.offT = 0; const nn = nav.nearest(car.pos.x, car.pos.z); if (nn) this.spawnAt(nn, game); }
+    } else this.offT = 0;
   }
 }

@@ -9,6 +9,7 @@ import { StaticWorld } from './collision.js';
 import { mulberry32, makeNoise2D, fbm, smoothstep, clamp, lerp, nextFrame } from './util.js';
 import * as TX from './textures.js';
 import { ENV } from './envAssets.js';
+import { buildStuttgartSky, buildStuttgartLandmarks } from './mapStuttgart.js';
 
 export const globalUniforms = { time: { value: 0 } };
 
@@ -18,7 +19,16 @@ export const MAPS = {
     name: 'TOKYO NIGHT',
     jp: '東京ナイト · 首都高湾岸線',
     desc: 'Midnight Shinjuku neon district, Wangan Bay Bridge & Hakone mountain touge.',
-    exposure: 0.78,
+    exposure: 0.72,
+    night: true,
+  },
+  stuttgart: {
+    id: 'stuttgart',
+    name: 'STUTTGART DUSK',
+    jp: 'Stuttgart · Kessel & Weinberge',
+    desc: 'Blue-hour over the Stuttgart basin — Schlossplatz, Fernsehturm, Neckar & vineyard hills.',
+    exposure: 0.7,
+    night: true,
   },
   coast: {
     id: 'coast',
@@ -26,6 +36,7 @@ export const MAPS = {
     jp: 'レッドビュー · コースト',
     desc: 'Golden-hour coastal highway loop, downtown grid & alpine canyon pass.',
     exposure: 0.62,
+    night: false,
   },
 };
 
@@ -40,6 +51,7 @@ export class World {
     this.statics = new StaticWorld();
     this.hf = new HeightField();
     this.updaters = [];
+    this.treeLodDist = 330;
   }
 
   clearWorld() {
@@ -98,10 +110,16 @@ export class World {
 
   heightAt(x, z) { return this.hf.ground(x, z); }
 
+  isNight() { return !!(MAPS[this.mapId] && MAPS[this.mapId].night); }
+
   // ---------------- Sky & lighting ----------------
   buildSky() {
     const scene = this.root;
     const isTokyo = this.mapId === 'tokyo';
+    if (this.mapId === 'stuttgart') {
+      buildStuttgartSky(scene, this.renderer, this);
+      return;
+    }
     if (isTokyo) {
       const elev = THREE.MathUtils.degToRad(22), az = THREE.MathUtils.degToRad(-115);
       const moon = new THREE.Vector3().setFromSphericalCoords(1, Math.PI / 2 - elev, az);
@@ -119,13 +137,17 @@ export class World {
           varying vec3 vDir; uniform vec3 uMoon;
           void main(){
             float y = clamp(vDir.y, 0.0, 1.0);
-            vec3 zenith = vec3(0.006, 0.010, 0.028);
-            vec3 mid = vec3(0.018, 0.022, 0.058);
-            vec3 hor = mix(vec3(0.09, 0.025, 0.11), vec3(0.02, 0.075, 0.13), 0.5 + 0.5 * vDir.x);
-            vec3 col = mix(hor, mid, smoothstep(0.0, 0.22, y));
-            col = mix(col, zenith, smoothstep(0.18, 0.75, y));
+            vec3 zenith = vec3(0.003, 0.006, 0.018);
+            vec3 mid = vec3(0.012, 0.016, 0.045);
+            // Magenta Shinjuku haze vs cyan bay — richer neon horizon
+            vec3 hor = mix(vec3(0.14, 0.03, 0.16), vec3(0.015, 0.09, 0.16), 0.5 + 0.5 * vDir.x);
+            hor += vec3(0.04, 0.01, 0.05) * pow(1.0 - y, 3.0);
+            vec3 col = mix(hor, mid, smoothstep(0.0, 0.2, y));
+            col = mix(col, zenith, smoothstep(0.16, 0.78, y));
             float md = max(dot(normalize(vDir), normalize(uMoon)), 0.0);
-            col += vec3(0.18, 0.28, 0.52) * pow(md, 18.0) * 0.7 + vec3(1.4, 1.6, 2.0) * smoothstep(0.9985, 0.9996, md);
+            col += vec3(0.14, 0.24, 0.48) * pow(md, 14.0) * 0.85;
+            col += vec3(0.55, 0.7, 1.1) * pow(md, 60.0) * 0.55;
+            col += vec3(1.6, 1.75, 2.2) * smoothstep(0.9982, 0.9997, md);
             gl_FragColor = vec4(col, 1.0);
           }`,
       });
@@ -181,11 +203,13 @@ export class World {
       this.scene.environment = this.envMap;
       pmrem.dispose();
 
-      this.scene.fog = new THREE.FogExp2(new THREE.Color(0.035, 0.042, 0.095), 0.00028);
+      // Cool night fog — deep enough that headlights carve volume into the dark
+      this.scene.fog = new THREE.FogExp2(new THREE.Color(0.025, 0.032, 0.078), 0.00034);
 
-      const hemi = new THREE.HemisphereLight(0x4a6cc8, 0x2e1638, 1.05);
+      // Dimmer fill so neon, lamps and car beams read as the primary light
+      const hemi = new THREE.HemisphereLight(0x3a58a8, 0x221028, 0.72);
       scene.add(hemi);
-      const dl = new THREE.DirectionalLight(0x94beff, 1.65);
+      const dl = new THREE.DirectionalLight(0xa8c8ff, 0.95);
       dl.position.copy(moon).multiplyScalar(400);
       dl.castShadow = true;
       dl.shadow.mapSize.set(2048, 2048);
@@ -198,9 +222,9 @@ export class World {
       const flareTex0 = TX.glowTexture('rgba(210,235,255,1)', 'rgba(80,140,255,0)', 256);
       const flareTex1 = TX.glowTexture('rgba(140,200,255,0.45)', 'rgba(80,120,255,0)', 128);
       const lf = new Lensflare();
-      lf.addElement(new LensflareElement(flareTex0, 220, 0, new THREE.Color(0.45, 0.6, 0.85)));
-      lf.addElement(new LensflareElement(flareTex1, 55, 0.55, new THREE.Color(0.15, 0.25, 0.45)));
-      lf.addElement(new LensflareElement(flareTex1, 85, 0.78, new THREE.Color(0.25, 0.12, 0.35)));
+      lf.addElement(new LensflareElement(flareTex0, 260, 0, new THREE.Color(0.55, 0.7, 0.95)));
+      lf.addElement(new LensflareElement(flareTex1, 70, 0.52, new THREE.Color(0.2, 0.35, 0.55)));
+      lf.addElement(new LensflareElement(flareTex1, 95, 0.78, new THREE.Color(0.35, 0.12, 0.45)));
       const flareHolder = new THREE.Object3D();
       flareHolder.position.copy(moon).multiplyScalar(9000);
       flareHolder.add(lf);
@@ -278,6 +302,7 @@ export class World {
   // ---------------- Terrain ----------------
   buildTerrain() {
     const isTokyo = this.mapId === 'tokyo';
+    const isSt = this.mapId === 'stuttgart';
     const n = this.hf.n;
     const pos = new Float32Array(n * n * 3);
     const col = new Float32Array(n * n * 3);
@@ -285,15 +310,16 @@ export class World {
     const splat = new Float32Array(n * n * 4); // grass, rock, sand, meadow
     const nz = makeNoise2D(55), nz2 = makeNoise2D(66);
     const tmpN = new THREE.Vector3();
-    const cGrass1 = isTokyo ? new THREE.Color(0.06, 0.12, 0.11) : new THREE.Color(0.26, 0.34, 0.12);
-    const cGrass2 = isTokyo ? new THREE.Color(0.10, 0.15, 0.16) : new THREE.Color(0.5, 0.44, 0.22);
-    const cGrass3 = isTokyo ? new THREE.Color(0.04, 0.09, 0.10) : new THREE.Color(0.18, 0.28, 0.1);
-    const cRock = isTokyo ? new THREE.Color(0.13, 0.14, 0.20) : new THREE.Color(0.36, 0.32, 0.29);
-    const cSand = isTokyo ? new THREE.Color(0.12, 0.14, 0.20) : new THREE.Color(0.78, 0.68, 0.5);
-    const cDirt = isTokyo ? new THREE.Color(0.11, 0.11, 0.15) : new THREE.Color(0.42, 0.36, 0.28);
+    // Stuttgart: vineyard greens + warm dusk dirt; Tokyo: cool night; Coast: golden grass
+    const cGrass1 = isTokyo ? new THREE.Color(0.06, 0.12, 0.11) : isSt ? new THREE.Color(0.16, 0.22, 0.1) : new THREE.Color(0.26, 0.34, 0.12);
+    const cGrass2 = isTokyo ? new THREE.Color(0.10, 0.15, 0.16) : isSt ? new THREE.Color(0.32, 0.28, 0.12) : new THREE.Color(0.5, 0.44, 0.22);
+    const cGrass3 = isTokyo ? new THREE.Color(0.04, 0.09, 0.10) : isSt ? new THREE.Color(0.12, 0.18, 0.08) : new THREE.Color(0.18, 0.28, 0.1);
+    const cRock = isTokyo ? new THREE.Color(0.13, 0.14, 0.20) : isSt ? new THREE.Color(0.32, 0.28, 0.24) : new THREE.Color(0.36, 0.32, 0.29);
+    const cSand = isTokyo ? new THREE.Color(0.12, 0.14, 0.20) : isSt ? new THREE.Color(0.45, 0.4, 0.3) : new THREE.Color(0.78, 0.68, 0.5);
+    const cDirt = isTokyo ? new THREE.Color(0.11, 0.11, 0.15) : isSt ? new THREE.Color(0.28, 0.24, 0.18) : new THREE.Color(0.42, 0.36, 0.28);
     const cSnow = isTokyo ? new THREE.Color(0.55, 0.64, 0.82) : new THREE.Color(0.92, 0.93, 0.96);
-    const cWet = isTokyo ? new THREE.Color(0.06, 0.08, 0.14) : new THREE.Color(0.32, 0.29, 0.22);
-    const cCity = isTokyo ? new THREE.Color(0.08, 0.09, 0.14) : new THREE.Color(0.3, 0.3, 0.3);
+    const cWet = isTokyo ? new THREE.Color(0.06, 0.08, 0.14) : isSt ? new THREE.Color(0.12, 0.16, 0.18) : new THREE.Color(0.32, 0.29, 0.22);
+    const cCity = isTokyo ? new THREE.Color(0.08, 0.09, 0.14) : isSt ? new THREE.Color(0.22, 0.2, 0.18) : new THREE.Color(0.3, 0.3, 0.3);
     const c = new THREE.Color();
     for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
       const k = j * n + i;
@@ -314,12 +340,13 @@ export class World {
       c.lerp(cRock, smoothstep(140, 200, h));
       c.lerp(cSnow, smoothstep(260, 320, h + fbm(nz, x / 80, z / 80, 2) * 30));
       c.lerp(cDirt, (1 - smoothstep(0, 6, rd)) * 0.8);
-      if (x > 1300) c.lerp(cSand, 1 - smoothstep(1.0, 6, h));
+      if (!isTokyo && !isSt && x > 1300) c.lerp(cSand, 1 - smoothstep(1.0, 6, h));
+      if (isSt && h > 55 && h < 160) c.lerp(cGrass2, 0.35); // vineyard bands on mid slopes
       if (h < WATER_LEVEL) c.copy(cWet);
       if (Math.abs(x) < 640 && Math.abs(z) < 640) c.lerp(cCity, 0.5);
       col[k * 3] = c.r; col[k * 3 + 1] = c.g; col[k * 3 + 2] = c.b;
       // material weights: rock on steep / high ground, sand on the coast, meadow on dry lowland patches, grass elsewhere
-      let wr = Math.max(smoothstep(0.1, 0.28, slope), smoothstep(150, 215, h)), ws = x > 1300 ? 1 - smoothstep(1.0, 7, h) : 0;
+      let wr = Math.max(smoothstep(0.1, 0.28, slope), smoothstep(150, 215, h)), ws = (!isTokyo && !isSt && x > 1300) ? 1 - smoothstep(1.0, 7, h) : 0;
       if (h < WATER_LEVEL + 1.2) ws = Math.max(ws, 0.9);
       let wm = smoothstep(0.35, 0.8, g) * (1 - wr) * (1 - ws) * 0.9;
       let wg = Math.max(0, 1 - wr - ws - wm);
@@ -368,6 +395,7 @@ export class World {
 
   buildFarLand() {
     const isTokyo = this.mapId === 'tokyo';
+    const isSt = this.mapId === 'stuttgart';
     const size = 18000, res = 180;
     const geo = new THREE.PlaneGeometry(size, size, res, res);
     geo.rotateX(-Math.PI / 2);
@@ -379,7 +407,7 @@ export class World {
       const x = p.getX(i), z = p.getZ(i);
       const d = Math.max(Math.abs(x), Math.abs(z));
       let h;
-      const eastness = smoothstep(1000, 2400, x) * (1 - smoothstep(2500, 5000, Math.abs(z)));
+      const eastness = isSt ? 0 : smoothstep(1000, 2400, x) * (1 - smoothstep(2500, 5000, Math.abs(z)));
       if (d < 2080) h = -70;
       else {
         h = 160 + smoothstep(2080, 5000, d) * 700 * (0.55 + 0.45 * fbm(nz, x / 1400, z / 1400, 4)) + fbm(nz, x / 300, z / 300, 3) * 80;
@@ -389,6 +417,9 @@ export class World {
       if (isTokyo) {
         c.setRGB(0.05, 0.06, 0.11).lerp(new THREE.Color(0.03, 0.07, 0.10), 0.4);
         if (h > 480) c.lerp(new THREE.Color(0.38, 0.46, 0.65), smoothstep(480, 600, h));
+      } else if (isSt) {
+        c.setRGB(0.12, 0.14, 0.18).lerp(new THREE.Color(0.14, 0.16, 0.1), 0.45);
+        if (h > 420) c.lerp(new THREE.Color(0.55, 0.52, 0.48), smoothstep(420, 580, h));
       } else {
         c.setRGB(0.3, 0.28, 0.25).lerp(new THREE.Color(0.2, 0.26, 0.14), 0.4);
         if (h > 480) c.lerp(new THREE.Color(0.9, 0.92, 0.95), smoothstep(480, 600, h));
@@ -404,15 +435,16 @@ export class World {
 
   buildWater() {
     const isTokyo = this.mapId === 'tokyo';
+    const isSt = this.mapId === 'stuttgart';
     const nt = TX.waterNormalTexture();
     nt.repeat.set(600, 600);
     const mat = new THREE.MeshStandardMaterial({
-      color: isTokyo ? 0x050d1e : 0x0d2a3a,
-      roughness: isTokyo ? 0.06 : 0.1,
-      metalness: isTokyo ? 0.28 : 0.1,
+      color: isTokyo ? 0x050d1e : isSt ? 0x0a1822 : 0x0d2a3a,
+      roughness: isTokyo ? 0.06 : isSt ? 0.12 : 0.1,
+      metalness: isTokyo ? 0.28 : isSt ? 0.18 : 0.1,
       normalMap: nt,
       normalScale: new THREE.Vector2(0.35, 0.35),
-      envMapIntensity: isTokyo ? 1.85 : 1.2,
+      envMapIntensity: isTokyo ? 1.85 : isSt ? 1.4 : 1.2,
     });
     // anti-sparkle: ripples fade to a flat mirror with distance and roughness rises toward the horizon, so far water is calm instead of noisy
     mat.onBeforeCompile = (sh) => {
@@ -463,12 +495,14 @@ export class World {
   }
 
   buildRoadMeshes() {
-    const hwTex = TX.roadTexture(3, true);
-    const cnTex = TX.roadTexture(2, false);
+    const style = this.mapId === 'tokyo' ? 'tokyo' : this.mapId === 'stuttgart' ? 'de' : 'us';
+    const hwTex = TX.roadTexture(3, true, style);
+    const cnTex = TX.roadTexture(2, false, style);
     const A = ENV.pbr.asphalt; for (const t of [A.normalMap, A.roughnessMap, A.map]) { t.wrapS = t.wrapT = THREE.RepeatWrapping; }
     // the painted road canvas keeps lane markings; real asphalt detail (grain, cracks, normal, roughness) is multiplied in by a second UV set tiled in world metres
     const asphaltPatch = (mat, tile) => {
       if (this.mapId === 'tokyo') { mat.metalness = 0.18; mat.envMapIntensity = 2.2; mat.color.setRGB(0.55, 0.57, 0.66); }
+      else if (this.mapId === 'stuttgart') { mat.metalness = 0.08; mat.envMapIntensity = 1.35; mat.color.setRGB(0.62, 0.6, 0.58); }
       mat.onBeforeCompile = (sh) => {
         sh.uniforms.tAsDiff = { value: A.map }; sh.uniforms.tAsNor = { value: A.normalMap }; sh.uniforms.tAsRough = { value: A.roughnessMap };
         sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec2 vAsUv;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvAsUv = vec2(position.x + position.z * 0.37, position.z - position.x * 0.21) / ' + tile.toFixed(1) + ';');
@@ -478,7 +512,7 @@ export class World {
           float asL = dot(asD, vec3(0.333)) * 1.9; float asL2 = dot(asD2, vec3(0.333)) * 1.9;
           float asPaint = smoothstep(0.55, 0.8, max(diffuseColor.r, max(diffuseColor.g, diffuseColor.b)));
           diffuseColor.rgb *= mix(clamp(asL * mix(0.8, 1.2, asL2 * 0.5), 0.45, 1.5), clamp(0.8 + asL * 0.25, 0.7, 1.15), asPaint);`)
-          .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n' + (this.mapId === 'tokyo' ? 'roughnessFactor = clamp(texture2D(tAsRough, vAsUv).g * 0.3 + 0.1, 0.1, 0.42);' : 'roughnessFactor = clamp(texture2D(tAsRough, vAsUv).g * 0.35 + 0.62, 0.45, 1.0);'))
+          .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n' + (this.mapId === 'tokyo' ? 'roughnessFactor = clamp(texture2D(tAsRough, vAsUv).g * 0.3 + 0.1, 0.1, 0.42);' : this.mapId === 'stuttgart' ? 'roughnessFactor = clamp(texture2D(tAsRough, vAsUv).g * 0.32 + 0.28, 0.22, 0.7);' : 'roughnessFactor = clamp(texture2D(tAsRough, vAsUv).g * 0.35 + 0.62, 0.45, 1.0);'))
           .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
           { vec3 an = texture2D(tAsNor, vAsUv).xyz * 2.0 - 1.0; normal = normalize(normal + (tbn_fake(an)) * 0.55); }`)
           .replace('void main() {', 'vec3 tbn_fake(vec3 n){ return vec3(n.x, 0.0, n.y); }\nvoid main() {');
@@ -487,7 +521,7 @@ export class World {
     const hwMat = new THREE.MeshStandardMaterial({ map: hwTex, roughness: 0.78, metalness: 0.0, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
     const cnMat = new THREE.MeshStandardMaterial({ map: cnTex, roughness: 0.8, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
     asphaltPatch(hwMat, 6); asphaltPatch(cnMat, 6);
-    const rpTex = TX.roadTexture(1, false);
+    const rpTex = TX.roadTexture(1, false, style);
     const rampMat = new THREE.MeshStandardMaterial({ map: rpTex, roughness: 0.8, polygonOffset: true, polygonOffsetFactor: -0.8, polygonOffsetUnits: -0.8 });
     asphaltPatch(rampMat, 6);
     const shoulderMat = new THREE.MeshStandardMaterial({ color: 0x4a4238, roughness: 1, polygonOffset: true, polygonOffsetFactor: -0.5, polygonOffsetUnits: -0.5 });
@@ -561,7 +595,13 @@ export class World {
     const every = 6;
     const cnt = Math.ceil(n / every);
     const poleMat = new THREE.MeshStandardMaterial({ color: 0x5a5e62, metalness: 0.8, roughness: 0.4 });
-    const headMat = new THREE.MeshStandardMaterial({ color: 0x222222, emissive: new THREE.Color(1, 0.72, 0.4), emissiveIntensity: 5 });
+    const night = this.isNight();
+    const st = this.mapId === 'stuttgart';
+    const headMat = new THREE.MeshStandardMaterial({
+      color: 0x222222,
+      emissive: st ? new THREE.Color(1.0, 0.78, 0.42) : night ? new THREE.Color(1.0, 0.92, 0.78) : new THREE.Color(1, 0.72, 0.4),
+      emissiveIntensity: night ? (st ? 6.5 : 7.5) : 5,
+    });
     const poles = new THREE.InstancedMesh(g, poleMat, cnt), heads = new THREE.InstancedMesh(head, headMat, cnt);
     poles.castShadow = true;
     const pools = [];
@@ -581,12 +621,23 @@ export class World {
   }
 
   addLightPools(list) {
-    if (!this.poolTex) this.poolTex = TX.glowTexture('rgba(255,190,120,0.9)', 'rgba(255,150,80,0)', 128);
+    const night = this.isNight();
+    const st = this.mapId === 'stuttgart';
+    // Tokyo LEDs cool-white; Stuttgart warm sodium; coast warm sodium daytime pools
+    const poolTex = st ? TX.softGlowTexture(255, 180, 100, 128)
+      : night ? TX.softGlowTexture(210, 230, 255, 128)
+      : TX.glowTexture('rgba(255,190,120,0.9)', 'rgba(255,150,80,0)', 128);
     const geo = new THREE.PlaneGeometry(1, 1); geo.rotateX(-Math.PI / 2);
-    const mat = new THREE.MeshBasicMaterial({ map: this.poolTex, transparent: true, opacity: 0.28, blending: THREE.AdditiveBlending, depthWrite: false, fog: true });
+    const mat = new THREE.MeshBasicMaterial({
+      map: poolTex, transparent: true, opacity: night ? (st ? 0.42 : 0.38) : 0.28,
+      blending: THREE.AdditiveBlending, depthWrite: false, fog: true,
+    });
     const im = new THREE.InstancedMesh(geo, mat, list.length);
     const m4 = new THREE.Matrix4();
-    list.forEach((p, i) => { m4.makeScale(p.s, 1, p.s).setPosition(p.x, p.y, p.z); im.setMatrixAt(i, m4); });
+    list.forEach((p, i) => {
+      const s = night ? p.s * 1.15 : p.s;
+      m4.makeScale(s, 1, s).setPosition(p.x, p.y, p.z); im.setMatrixAt(i, m4);
+    });
     im.renderOrder = 2;
     this.root.add(im);
   }
@@ -627,7 +678,13 @@ export class World {
     const scene = this.root;
     // ground asphalt
     const AS = ENV.pbr.asphalt; for (const t of [AS.map, AS.normalMap, AS.roughnessMap]) { t.repeat.set(1224 / 7, 1224 / 7); t.wrapS = t.wrapT = THREE.RepeatWrapping; }
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(1224, 1224), new THREE.MeshStandardMaterial({ map: AS.map, normalMap: AS.normalMap, normalScale: new THREE.Vector2(0.9, 0.9), roughnessMap: AS.roughnessMap, roughness: this.mapId === 'tokyo' ? 0.3 : 1, metalness: this.mapId === 'tokyo' ? 0.2 : 0, envMapIntensity: this.mapId === 'tokyo' ? 2.2 : 1, color: this.mapId === 'tokyo' ? 0x6a6c7a : 0xd0d0d0 }));
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(1224, 1224), new THREE.MeshStandardMaterial({
+      map: AS.map, normalMap: AS.normalMap, normalScale: new THREE.Vector2(0.9, 0.9), roughnessMap: AS.roughnessMap,
+      roughness: this.mapId === 'tokyo' ? 0.3 : this.mapId === 'stuttgart' ? 0.55 : 1,
+      metalness: this.mapId === 'tokyo' ? 0.2 : this.mapId === 'stuttgart' ? 0.08 : 0,
+      envMapIntensity: this.mapId === 'tokyo' ? 2.2 : this.mapId === 'stuttgart' ? 1.4 : 1,
+      color: this.mapId === 'tokyo' ? 0x6a6c7a : this.mapId === 'stuttgart' ? 0x8a8680 : 0xd0d0d0,
+    }));
     ground.rotation.x = -Math.PI / 2; ground.position.y = 0.04; ground.receiveShadow = true;
     scene.add(ground);
 
@@ -672,6 +729,10 @@ export class World {
       let type = 'build';
       if (r < 0.09 && d > 150) type = 'park'; else if (r < 0.13 && d > 150) type = 'plaza';
       if (this.mapId === 'tokyo' && Math.abs(cx - 60) < 1 && Math.abs(cz - 60) < 1) type = 'tower'; // Tokyo Tower block
+      if (this.mapId === 'stuttgart' && Math.abs(cx - 60) < 1 && Math.abs(cz + 180) < 1) type = 'tower'; // Fernsehturm block
+      if (this.mapId === 'stuttgart' && Math.abs(cx + 60) < 1 && Math.abs(cz + 60) < 1) type = 'plaza'; // Schlossplatz
+      // Open park ring around Fernsehturm (keep race-grid streets built; only clear the tower's block neighbours)
+      if (this.mapId === 'stuttgart' && type === 'build' && Math.hypot(cx - 60, cz + 180) < 160) type = 'park';
       blocks.push({ cx, cz, type, d });
     }
     const bs = S - W * 2; // block size (100)
@@ -679,7 +740,7 @@ export class World {
     const slabGeo = new THREE.BoxGeometry(bs, 0.3, bs); slabGeo.translate(0, 0.15, 0);
     const slabMat = new THREE.MeshStandardMaterial({ map: concTex, normalMap: CN.normalMap, roughnessMap: CN.roughnessMap, roughness: 1 });
     const slabs = new THREE.InstancedMesh(slabGeo, slabMat, blocks.length);
-    const grassMat = new THREE.MeshStandardMaterial({ color: 0x3e5a24, roughness: 1 });
+    const grassMat = new THREE.MeshStandardMaterial({ color: this.mapId === 'stuttgart' ? 0x2a3a18 : 0x3e5a24, roughness: 1 });
     const parkTops = [];
     const m4 = new THREE.Matrix4();
     blocks.forEach((b, i) => {
@@ -699,7 +760,12 @@ export class World {
     // buildings
     const bldg = [];
     const T = this.mapId === 'tokyo';
-    const palette = T ? [0x3a3f5c, 0x2c3350, 0x4a4560, 0x2a2f45, 0x55486a, 0x3c4a62, 0x5a5a78, 0x262a3c, 0x483a58] : [0x8a8580, 0xa89c88, 0x6d7278, 0x5a6470, 0x9a6a52, 0x7e7a70, 0xb0a898, 0x4a5058, 0x6a5a4c];
+    const St = this.mapId === 'stuttgart';
+    const palette = T
+      ? [0x3a3f5c, 0x2c3350, 0x4a4560, 0x2a2f45, 0x55486a, 0x3c4a62, 0x5a5a78, 0x262a3c, 0x483a58]
+      : St
+        ? [0xc4b49a, 0xb8a888, 0xd0c4b0, 0x9a8a78, 0xa89880, 0x8a7a68, 0xc8bca8, 0x6e6860, 0xb0a090]
+        : [0x8a8580, 0xa89c88, 0x6d7278, 0x5a6470, 0x9a6a52, 0x7e7a70, 0xb0a898, 0x4a5058, 0x6a5a4c];
     let towerBlock = null;
     const addB = (x, z, w, d, h, seed, style, color) => bldg.push({ x, z, w, d, h, seed, style, color });
     const treeSpots = [];
@@ -735,15 +801,18 @@ export class World {
         lots.push([b.cx - q, b.cz - q, s, s], [b.cx + q, b.cz - q, s, s], [b.cx - q, b.cz + q, s, s], [b.cx + q, b.cz + q, s, s]);
       }
       for (const [x, z, w, d] of lots) {
-        const hmax = T ? 30 + f * f * 210 : 18 + f * f * 190;
-        const h = T ? 16 + Math.pow(rnd(), 0.75) * hmax + f * 26 : 10 + rnd() * rnd() * hmax + f * 20;
+        // Stuttgart = mid-rise European basin (not Tokyo megatowers); coast keeps tall CBD
+        const hmax = T ? 30 + f * f * 210 : St ? 14 + f * f * 48 : 18 + f * f * 190;
+        const h = T ? 16 + Math.pow(rnd(), 0.75) * hmax + f * 26
+          : St ? 8 + rnd() * hmax + f * 10
+          : 10 + rnd() * rnd() * hmax + f * 20;
         const shrink = 0.8 + rnd() * 0.2;
         const style = f > 0.4 && rnd() < 0.55 ? 0.75 + rnd() * 0.25 : rnd() * 0.7;
         const color = palette[Math.floor(rnd() * palette.length)];
         const seed = rnd();
         const bw = w * shrink, bd = d * (0.8 + rnd() * 0.2);
         addB(x, z, bw, bd, h, seed, style, color);
-        if (h > 70) {
+        if (!St && h > 70) {
           addB(x, z, bw * 0.7, bd * 0.7, h * (0.18 + rnd() * 0.2), seed + 0.3, style, color);
           if (rnd() < 0.6) addB(x, z, bw * 0.35, bd * 0.35, h * 0.1, seed + 0.6, style, 0x3a3d42);
         }
@@ -780,10 +849,14 @@ export class World {
       col.set(b.color); bim.setColorAt(i, col);
       seeds[i * 2] = b.seed; seeds[i * 2 + 1] = b.style;
       if (y + b.h > 110 && b.w < 30) beacons.push([b.x, y + b.h + 0.6, b.z]);
-      if (y === 0.3 && b.h > 25 && rnd() < (this.mapId === 'tokyo' ? 0.9 : 0.35)) {
+      if (y === 0.3 && b.h > 25 && rnd() < (this.mapId === 'tokyo' ? 0.9 : this.mapId === 'stuttgart' ? 0.04 : 0.35)) {
         const side = Math.floor(rnd() * 4);
         const hy = 8 + rnd() * Math.min(40, b.h - 16);
-        const nc = [[4, 0.4, 2.2], [0.4, 2.5, 4], [4, 2.6, 0.3], [0.3, 3.5, 3], [4, 1.2, 3.2]][Math.floor(rnd() * 5)];
+        const nc = (this.mapId === 'tokyo'
+          ? [[7, 0.45, 3.4], [0.45, 4.2, 6.5], [6.5, 3.6, 0.35], [0.35, 5.2, 4.8], [6.5, 1.4, 4.8]]
+          : this.mapId === 'stuttgart'
+            ? [[3.2, 1.4, 0.5], [2.8, 1.8, 0.6], [1.2, 1.6, 3.0], [3.5, 1.0, 0.4], [2.2, 2.0, 0.7]]
+            : [[4, 0.4, 2.2], [0.4, 2.5, 4], [4, 2.6, 0.3], [0.3, 3.5, 3], [4, 1.2, 3.2]])[Math.floor(rnd() * 5)];
         if (this.mapId === 'tokyo') {
           const k = Math.floor(rnd() * 6); s_tokyoSigns.push({ x: b.x, z: b.z, y: 6 + rnd() * Math.min(60, b.h - 10), side: Math.floor(rnd() * 4), w: b.w, d: b.d, k, vert: rnd() < 0.4 });
           // Shibuya scramble: huge video screens on the buildings facing the crossing at the origin
@@ -869,6 +942,7 @@ export class World {
     }
 
     if (this.mapId === 'tokyo') { this.buildTokyoDecor(s_tokyoSigns, lines, S, H, W, rnd); if (towerBlock) this.buildTokyoLandmarks(towerBlock, S, H, W); }
+    if (this.mapId === 'stuttgart' && towerBlock) buildStuttgartLandmarks(this, towerBlock, S, H, W);
 
     // fountains
     for (const b of fountains) {
@@ -898,7 +972,13 @@ export class World {
     }
     // scanned lamp post (Poly Haven street_lamp_01), arm points toward the road; glowing head kept as a separate emissive mesh
     const lampP = ENV.lamp;
-    const headMat = new THREE.MeshStandardMaterial({ color: 0x111111, emissive: new THREE.Color(1, 0.78, 0.5), emissiveIntensity: 5 });
+    const night = this.isNight();
+    const st = this.mapId === 'stuttgart';
+    const headMat = new THREE.MeshStandardMaterial({
+      color: 0x111111,
+      emissive: st ? new THREE.Color(1.0, 0.82, 0.48) : night ? new THREE.Color(0.95, 0.97, 1.15) : new THREE.Color(1, 0.78, 0.5),
+      emissiveIntensity: night ? (st ? 7 : 8) : 5,
+    });
     const lampH = lampP.size.y;
     const headGeo = new THREE.BoxGeometry(0.5, 0.12, 1.1); headGeo.translate(0, lampH - 0.3, 1.9); // glowing luminaire out over the road
     const armGeo = new THREE.BoxGeometry(0.12, 0.12, 2.2); armGeo.translate(0, lampH - 0.15, 1.1);
@@ -1078,9 +1158,9 @@ export class World {
         roughnessFactor = mix(roughnessFactor, 0.16, max(bWin, bShop));`)
         .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         vec3 warm = mix(vec3(1.0, 0.7, 0.4), vec3(0.7, 0.85, 1.0), step(0.86, bRnd));
-        totalEmissiveRadiance += warm * bLit * (${this.mapId === 'tokyo' ? '0.16 + bRnd * 0.34' : '0.02 + bRnd * 0.1'});
+        totalEmissiveRadiance += warm * bLit * (${this.mapId === 'tokyo' ? '0.28 + bRnd * 0.55' : this.mapId === 'stuttgart' ? '0.22 + bRnd * 0.48' : '0.02 + bRnd * 0.1'});
         vec3 shopCol = mix(vec3(1.0, 0.55, 0.25), vec3(0.35, 0.75, 1.0), fract(vSeed.x * 13.0));
-        totalEmissiveRadiance += shopCol * bShop * ${this.mapId === 'tokyo' ? '2.4' : '1.4'} * step(0.25, fract(bu * 0.07 + vSeed.x));`);
+        totalEmissiveRadiance += shopCol * bShop * ${this.mapId === 'tokyo' ? '2.4' : this.mapId === 'stuttgart' ? '2.0' : '1.4'} * step(0.25, fract(bu * 0.07 + vSeed.x));`);
     };
     return m;
   }
@@ -1140,7 +1220,8 @@ export class World {
           const items = bk.items.filter((t) => t.v === v); if (!items.length) continue;
           const tr = new THREE.InstancedMesh(variants[v].trunk, barkMat, items.length), fo = new THREE.InstancedMesh(variants[v].foliage, leafMat, items.length);
           items.forEach((t, i) => { q.setFromAxisAngle(up, t.rot); sc.set(t.s, yScale(t), t.s); p.set(t.x, t.h - 0.25, t.z); m4.compose(p, q, sc); tr.setMatrixAt(i, m4); fo.setMatrixAt(i, m4); fo.setColorAt(i, t.tint); });
-          tr.castShadow = true; tr.receiveShadow = true; fo.castShadow = true; fo.receiveShadow = false;
+          // Trunks cast; foliage cards are dense alpha-tested tris — free shadow-map win to skip them
+          tr.castShadow = true; tr.receiveShadow = true; fo.castShadow = false; fo.receiveShadow = false;
           for (const im of [tr, fo]) { im.computeBoundingSphere(); im.visible = false; this.root.add(im); hi.push(im); }
           fo.instanceColor.needsUpdate = true;
         }
@@ -1169,8 +1250,8 @@ export class World {
         if (cullDist) this.propChunks.push({ cx: bk.cx, cz: bk.cz, ims, d: cullDist, on: true });
       }
     };
-    // perf: scan rocks are ~2k tris each; small rocks vanish past ~450 m, boulders past ~750 m (fog hides both), still casting near the car
-    scatter(rocks.filter((r) => !r.big), ENV.rock, 300, true); scatter(rocks.filter((r) => r.big), ENV.boulder, 600, true);
+    // Small rocks receive only (dense casters); boulders still cast — both distance-culled
+    scatter(rocks.filter((r) => !r.big), ENV.rock, 300, false); scatter(rocks.filter((r) => r.big), ENV.boulder, 600, true);
     // undergrowth: shrubs + ferns near trees (denser under broadleaf / lowland), instanced per chunk, no collision
     {
       const under = [], ferns = [];
@@ -1209,14 +1290,16 @@ export class World {
     ctx.drawImage(tmp, 0, 0, S, S);
     const tx = (x) => (x + WORLD_HALF) * sc;
     // city blocks
-    ctx.fillStyle = this.mapId === 'tokyo' ? '#1a1830' : '#2b3036';
+    ctx.fillStyle = this.mapId === 'tokyo' ? '#1a1830' : this.mapId === 'stuttgart' ? '#1e1c18' : '#2b3036';
     ctx.fillRect(tx(-612), tx(-612), 1224 * sc, 1224 * sc);
     ctx.fillStyle = '#15181c';
     for (let i = -CITY_HALF; i < CITY_HALF; i += STREET_SPACING) for (let j = -CITY_HALF; j < CITY_HALF; j += STREET_SPACING)
       ctx.fillRect(tx(i + 10), tx(j + 10), 100 * sc, 100 * sc);
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     for (const r of this.net.roads) {
-      ctx.strokeStyle = this.mapId === 'tokyo' ? (r.kind === 'highway' ? '#ff4fb4' : '#3fd8ff') : (r.kind === 'highway' ? '#8f9aa6' : '#727c86');
+      ctx.strokeStyle = this.mapId === 'tokyo' ? (r.kind === 'highway' ? '#ff4fb4' : '#3fd8ff')
+        : this.mapId === 'stuttgart' ? (r.kind === 'highway' ? '#e8a040' : '#8a9aaa')
+        : (r.kind === 'highway' ? '#8f9aa6' : '#727c86');
       ctx.lineWidth = r.halfW * 2 * sc * 1.2;
       ctx.beginPath();
       r.pts.forEach((p, i) => (i ? ctx.lineTo(tx(p.x), tx(p.z)) : ctx.moveTo(tx(p.x), tx(p.z))));
@@ -1234,9 +1317,12 @@ export class World {
     if (f && this.propChunks) for (const c of this.propChunks) { const on = Math.hypot(c.cx - f.x, c.cz - f.z) < c.d + 150; if (on !== c.on) { c.on = on; for (const m of c.ims) m.visible = on; } }
     if (f && this.cityChunks) for (const c of this.cityChunks) { const on = Math.hypot(c.cx - f.x, c.cz - f.z) < c.d; if (on !== c.on) { c.on = on; for (const m of c.ims) m.visible = on; } }
     // tree LOD: full-detail trees only near the camera; far chunks use cheap vertex-coloured trees
-    if (f && this.treeChunks) for (const c of this.treeChunks) {
-      const d = Math.hypot(c.cx - f.x, c.cz - f.z), want = d < 330 ? 1 : 0;
-      if (want !== c.state) { c.state = want; for (const m of c.hi) m.visible = !!want; for (const m of c.lo) m.visible = !want; }
+    if (f && this.treeChunks) {
+      const lodR = this.treeLodDist || 330;
+      for (const c of this.treeChunks) {
+        const d = Math.hypot(c.cx - f.x, c.cz - f.z), want = d < lodR ? 1 : 0;
+        if (want !== c.state) { c.state = want; for (const m of c.hi) m.visible = !!want; for (const m of c.lo) m.visible = !want; }
+      }
     }
   }
 }

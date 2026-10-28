@@ -8,7 +8,7 @@ await pg.goto(`http://localhost:${srv.address().port}/?noperf`); await pg.waitFo
 const out = await pg.evaluate(() => {
   const { game } = window.__rp; const rows = [];
   const N = window.__rp.cars ? window.__rp.cars.length : 4;
-  for (let i = 0; i < 6; i++) for (const mode of ['race', 'cop', 'free']) {
+  for (let i = 0; i < 7; i++) for (const mode of ['race', 'cop', 'free']) {
     try { game.start(mode, i); const pl = game.player; rows.push({ pick: i, mode, spec: pl.spec.id || pl.spec.kind, specName: pl.spec.name, carIdx: game.carIdx, wheelsFound: pl.model.wheels.length, L: +pl.dims.L.toFixed(2), glb: !!pl.model.glb, police: pl.police }); } catch (e) { rows.push({ pick: i, mode, error: String(e.message || e) }); }
   }
   return rows;
