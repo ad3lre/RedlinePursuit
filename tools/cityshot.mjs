@@ -4,7 +4,7 @@ const srv = http.createServer((q, r) => { const u0 = decodeURIComponent(q.url.sp
 const br = await puppeteer.launch({ executablePath: '/usr/bin/google-chrome', headless: 'new', args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'], defaultViewport: { width: 1280, height: 720 }, protocolTimeout: 240000 });
 const pg = await br.newPage(); pg.on('pageerror', (e) => console.log('[pageerror]', e.message));
 await pg.evaluateOnNewDocument(() => localStorage.setItem('redline-settings', JSON.stringify({ quality: 1 })));
-await pg.goto('http://localhost:8776/?noperf'); await pg.waitForFunction('window.__rp', { timeout: 200000 });
+await pg.goto('http://localhost:8776/?noperf&map=tokyo'); await pg.waitForFunction('window.__rp', { timeout: 200000 });
 const [x = 130, z = 240, yaw = 200] = process.argv.slice(3).map(Number);
 const url = await pg.evaluate((x, z, yaw) => { const { game, world, renderer, scene, camera } = window.__rp; game.start('free', 0); for (let i = 0; i < 3; i++) game.update(1 / 60);
   game.player.place(x, z + 0, yaw * Math.PI / 180, 0); game.update(1 / 60);

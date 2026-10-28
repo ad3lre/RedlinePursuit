@@ -80,9 +80,15 @@ export class Game {
   }
   areaName(car) {
     const p = car.pos;
+    if (this.world.mapId === 'tokyo') {
+      if (Math.abs(p.x) < 180 && Math.abs(p.z) < 180) return 'Shibuya Scramble';
+      if (Math.abs(p.x) < 640 && Math.abs(p.z) < 640) return p.z < 0 ? 'Shinjuku Kabukicho' : 'Roppongi & Tokyo Tower';
+      if (p.x > 550) return Math.abs(p.z) < 220 ? 'Rainbow Bridge' : 'the Wangan Bayshore Expressway';
+      return 'the Hakone mountain touge';
+    }
     if (Math.abs(p.x) < 640 && Math.abs(p.z) < 640) return 'downtown';
-    if (Math.hypot(p.x, p.z) > 1100) return p.x > 1000 ? (this.world.mapId === 'tokyo' ? 'the Wangan bay bridge' : 'the coast highway') : 'the highway';
-    return this.world.mapId === 'tokyo' ? 'the Hakone touge' : 'the hills';
+    if (Math.hypot(p.x, p.z) > 1100) return p.x > 1000 ? 'the coast highway' : 'the highway';
+    return 'the hills';
   }
 
   makeGate() {
@@ -120,7 +126,8 @@ export class Game {
   }
 
   raceRoute() {
-    if (this._route) return this._route;
+    if (this._route && this._routeMap === this.world.mapId) return this._route;
+    this._routeMap = this.world.mapId;
     const nav = this.world.nav;
     const C = (x, z) => nav.cityId(x, z);
     const L = (d) => nav.loopId((d * Math.PI) / 180);
@@ -130,6 +137,27 @@ export class Game {
     const ramps = nav.ramps || [];
     const pick = (tag) => ramps.filter((r) => r.tag === tag).sort((a, b) => b.loopIndex - a.loopIndex)[0];
     const pickLow = (tag) => ramps.filter((r) => r.tag === tag).sort((a, b) => a.loopIndex - b.loopIndex)[0];
+    if (this.world.mapId === 'tokyo') {
+      // Tokyo Night route: Shibuya Scramble (0,0) -> past Tokyo Tower -> Rainbow Bridge over Tokyo Bay ->
+      // Wangan Bayshore Expressway -> Shinjuku Kabukicho under the overhead Shuto viaduct -> Hakone/Haruna mountain touge -> Akihabara finish
+      const eastIn = ramps.filter((r) => r.tag === 'east').find((r) => r.loopIndex > 0 && r.loopIndex < 120) || pickLow('east');
+      const southOut = pickLow('south');
+      const northIn = pickLow('north');
+      const westOut = pick('west');
+      const wps = [
+        C(-240, 240), C(0, 240), C(0, 0), C(600, 0),
+        eastIn.navIds[0], eastIn.navIds[eastIn.navIds.length - 1],
+        L(18), L(38), L(62),
+        southOut.navIds[southOut.navIds.length - 1], southOut.navIds[0],
+        C(0, 600), C(-120, 600), C(-120, -600), C(0, -600),
+        northIn.navIds[0], northIn.navIds[northIn.navIds.length - 1],
+        L(-115), L(-138), L(-160),
+        westOut.navIds[westOut.navIds.length - 1], westOut.navIds[0],
+        C(-600, 0), C(-360, 0), C(-360, -240), C(120, -240),
+      ];
+      this._route = buildRoute(nav, wps);
+      return this._route;
+    }
     const entry = pickLow('north'), exit = pick('south'); // entry merges heading with the race direction (lower index), exit leaves it (higher index)
     const wps = [C(0, 360), C(0, -600), entry.navIds[0], entry.navIds[entry.navIds.length - 1], L(-115), L(-135), L(-160), L(180), L(155), L(130), L(108), exit.navIds[exit.navIds.length - 1], exit.navIds[0], C(0, 600), C(360, 600), C(360, 240), C(120, 240), C(120, -120), C(-240, -120), C(-240, 120)];
     this._route = buildRoute(nav, wps);

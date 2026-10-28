@@ -669,6 +669,7 @@ export class World {
       const r = rnd();
       let type = 'build';
       if (r < 0.09 && d > 150) type = 'park'; else if (r < 0.13 && d > 150) type = 'plaza';
+      if (this.mapId === 'tokyo' && Math.abs(cx - 60) < 1 && Math.abs(cz - 60) < 1) type = 'tower'; // Tokyo Tower block
       blocks.push({ cx, cz, type, d });
     }
     const bs = S - W * 2; // block size (100)
@@ -695,7 +696,9 @@ export class World {
 
     // buildings
     const bldg = [];
-    const palette = [0x8a8580, 0xa89c88, 0x6d7278, 0x5a6470, 0x9a6a52, 0x7e7a70, 0xb0a898, 0x4a5058, 0x6a5a4c];
+    const T = this.mapId === 'tokyo';
+    const palette = T ? [0x3a3f5c, 0x2c3350, 0x4a4560, 0x2a2f45, 0x55486a, 0x3c4a62, 0x5a5a78, 0x262a3c, 0x483a58] : [0x8a8580, 0xa89c88, 0x6d7278, 0x5a6470, 0x9a6a52, 0x7e7a70, 0xb0a898, 0x4a5058, 0x6a5a4c];
+    let towerBlock = null;
     const addB = (x, z, w, d, h, seed, style, color) => bldg.push({ x, z, w, d, h, seed, style, color });
     const treeSpots = [];
     const fountains = [];
@@ -711,9 +714,17 @@ export class World {
         for (let k = 0; k < 8; k++) { const a = (k / 8) * Math.PI * 2; treeSpots.push({ x: b.cx + Math.cos(a) * 34, z: b.cz + Math.sin(a) * 34, s: 0.9 }); }
         continue;
       }
+      if (b.type === 'tower') { towerBlock = b; continue; }
       const lotsR = rnd();
       const lots = [];
-      if (f > 0.55 && lotsR < 0.45) lots.push([b.cx, b.cz, inset * 2, inset * 2]);
+      if (T) {
+        // Tokyo: dense narrow lots (3 x 2 grid, some merged) with tight alleys between them
+        const g = 2, lw = (inset * 2 - g * 2) / 3, ld = (inset * 2 - g) / 2;
+        for (let ix = 0; ix < 3; ix++) for (let iz = 0; iz < 2; iz++) {
+          if (rnd() < 0.08) continue;
+          lots.push([b.cx - inset + lw / 2 + ix * (lw + g), b.cz - inset + ld / 2 + iz * (ld + g), lw, ld]);
+        }
+      } else if (f > 0.55 && lotsR < 0.45) lots.push([b.cx, b.cz, inset * 2, inset * 2]);
       else if (lotsR < 0.7) {
         const g = 3;
         lots.push([b.cx - inset / 2 - g / 2, b.cz, inset - g, inset * 2], [b.cx + inset / 2 + g / 2, b.cz, inset - g, inset * 2]);
@@ -722,8 +733,8 @@ export class World {
         lots.push([b.cx - q, b.cz - q, s, s], [b.cx + q, b.cz - q, s, s], [b.cx - q, b.cz + q, s, s], [b.cx + q, b.cz + q, s, s]);
       }
       for (const [x, z, w, d] of lots) {
-        const hmax = 18 + f * f * 190;
-        const h = 10 + rnd() * rnd() * hmax + f * 20;
+        const hmax = T ? 30 + f * f * 210 : 18 + f * f * 190;
+        const h = T ? 16 + Math.pow(rnd(), 0.75) * hmax + f * 26 : 10 + rnd() * rnd() * hmax + f * 20;
         const shrink = 0.8 + rnd() * 0.2;
         const style = f > 0.4 && rnd() < 0.55 ? 0.75 + rnd() * 0.25 : rnd() * 0.7;
         const color = palette[Math.floor(rnd() * palette.length)];
@@ -771,7 +782,14 @@ export class World {
         const side = Math.floor(rnd() * 4);
         const hy = 8 + rnd() * Math.min(40, b.h - 16);
         const nc = [[4, 0.4, 2.2], [0.4, 2.5, 4], [4, 2.6, 0.3], [0.3, 3.5, 3], [4, 1.2, 3.2]][Math.floor(rnd() * 5)];
-        if (this.mapId === 'tokyo') { const k = Math.floor(rnd() * 6); s_tokyoSigns.push({ x: b.x, z: b.z, y: 6 + rnd() * Math.min(60, b.h - 10), side: Math.floor(rnd() * 4), w: b.w, d: b.d, k, vert: rnd() < 0.4 }); }
+        if (this.mapId === 'tokyo') {
+          const k = Math.floor(rnd() * 6); s_tokyoSigns.push({ x: b.x, z: b.z, y: 6 + rnd() * Math.min(60, b.h - 10), side: Math.floor(rnd() * 4), w: b.w, d: b.d, k, vert: rnd() < 0.4 });
+          // Shibuya scramble: huge video screens on the buildings facing the crossing at the origin
+          if (Math.abs(b.x) < 90 && Math.abs(b.z) < 90 && b.h > 34) {
+            const face = Math.abs(b.x) > Math.abs(b.z) ? (b.x > 0 ? 3 : 1) : (b.z > 0 ? 2 : 0);
+            s_tokyoSigns.push({ x: b.x, z: b.z, y: 14 + rnd() * 8, side: face, w: b.w, d: b.d, k: Math.floor(rnd() * 6), vert: false, big: true });
+          }
+        }
         neon.push({ x: b.x, z: b.z, y: hy, side, w: b.w, d: b.d, c: nc, sw: 4 + rnd() * 6, sh: 1.5 + rnd() * 3 });
       }
     });
@@ -848,7 +866,7 @@ export class World {
       scene.add(ni);
     }
 
-    if (this.mapId === 'tokyo') this.buildTokyoDecor(s_tokyoSigns, lines, S, H, W, rnd);
+    if (this.mapId === 'tokyo') { this.buildTokyoDecor(s_tokyoSigns, lines, S, H, W, rnd); if (towerBlock) this.buildTokyoLandmarks(towerBlock, S, H, W); }
 
     // fountains
     for (const b of fountains) {
@@ -920,6 +938,53 @@ export class World {
   }
 
   // Tokyo Night: bilingual neon billboards on tower faces, vertical kanji banners, paper lanterns and glowing vending machines.
+  // Tokyo landmarks: lit lattice Tokyo Tower in its reserved block + an overhead Shuto-style viaduct over one avenue (pillars stand on the sidewalks, so traffic is unaffected)
+  buildTokyoLandmarks(tower, S, H, W) {
+    const g = new THREE.Group();
+    const red = new THREE.MeshStandardMaterial({ color: 0xff4a1c, emissive: new THREE.Color(1.0, 0.22, 0.05), emissiveIntensity: 0.9, roughness: 0.5, metalness: 0.4 });
+    const white = new THREE.MeshStandardMaterial({ color: 0xf2f2f2, emissive: new THREE.Color(0.9, 0.9, 1.0), emissiveIntensity: 0.8, roughness: 0.5, metalness: 0.4 });
+    const beam = (ax, ay, az, bx, by, bz, r, mat) => {
+      const a = new THREE.Vector3(ax, ay, az), b = new THREE.Vector3(bx, by, bz), d = b.clone().sub(a), len = d.length();
+      const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 5), mat);
+      m.position.copy(a).addScaledVector(d, 0.5); m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize()); g.add(m);
+    };
+    const H1 = 150, H2 = 235, TOP = 330;
+    const half = (y) => 21 * (1 - Math.min(1, y / TOP)) ** 1.6 + 1.2; // leg half-spacing narrows with height
+    const levels = [0, 25, 50, 75, 100, 125, H1, 180, 210, H2];
+    for (let i = 0; i < levels.length - 1; i++) {
+      const y0 = levels[i], y1 = levels[i + 1], h0 = half(y0), h1 = half(y1), mat = i % 2 ? white : red;
+      for (const [sx, sz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) beam(sx * h0, y0, sz * h0, sx * h1, y1, sz * h1, 0.7, mat);
+      // cross bracing on each face
+      for (const [sx, sz, tx, tz] of [[-1, -1, 1, -1], [1, -1, 1, 1], [1, 1, -1, 1], [-1, 1, -1, -1]]) { beam(sx * h0, y0, sz * h0, tx * h1, y1, tz * h1, 0.28, mat); beam(tx * h0, y0, tz * h0, sx * h1, y1, sz * h1, 0.28, mat); }
+    }
+    for (const [y, w, hh] of [[H1, 1.0, 9], [H2, 0.55, 6]]) { // observation decks
+      const d = new THREE.Mesh(new THREE.BoxGeometry(half(y) * 2 + 7 * w, hh, half(y) * 2 + 7 * w), new THREE.MeshStandardMaterial({ color: 0xffd9a0, emissive: new THREE.Color(1.6, 1.0, 0.5), emissiveIntensity: 1.2, roughness: 0.6 }));
+      d.position.y = y + hh / 2; g.add(d);
+    }
+    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 1.2, TOP - H2 + 20, 8), red); mast.position.y = H2 + (TOP - H2 + 20) / 2; g.add(mast);
+    const tip = new THREE.Mesh(new THREE.SphereGeometry(1.6, 10, 8), new THREE.MeshBasicMaterial({ color: new THREE.Color(6, 0.3, 0.2) })); tip.position.y = TOP + 21; g.add(tip);
+    g.position.set(tower.cx, 0.3, tower.cz);
+    this.root.add(g);
+    this.statics.addBox(tower.cx - 24, tower.cz - 24, tower.cx + 24, tower.cz + 24, 'block');
+    const bm = new THREE.PointLight(0xff8040, 900, 220, 2); bm.position.set(tower.cx, 40, tower.cz); this.root.add(bm);
+    this.updaters.push((dt, t) => { tip.material.color.setRGB(6 * (0.35 + 0.65 * (Math.sin(t * 2.4) > 0 ? 1 : 0)), 0.3, 0.2); });
+
+    // overhead Shuto expressway deck along the z = 240 avenue (visual only; pillars on the sidewalks)
+    const zc = 240, deckY = 15, halfW = W + 3.5;
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(H * 2, 1.4, halfW * 2), new THREE.MeshStandardMaterial({ color: 0x2a2d3c, roughness: 0.85, metalness: 0.1 }));
+    deck.position.set(0, deckY, zc); deck.castShadow = deck.receiveShadow = true; this.root.add(deck);
+    const rail = new THREE.MeshStandardMaterial({ color: 0x555a70, roughness: 0.5, metalness: 0.6 });
+    const glow = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.2, 2.2, 3.2) });
+    for (const sz of [-1, 1]) {
+      const r = new THREE.Mesh(new THREE.BoxGeometry(H * 2, 1.1, 0.4), rail); r.position.set(0, deckY + 1.2, zc + sz * (halfW - 0.2)); this.root.add(r);
+      const l = new THREE.Mesh(new THREE.BoxGeometry(H * 2, 0.12, 0.12), glow); l.position.set(0, deckY + 1.9, zc + sz * (halfW - 0.2)); this.root.add(l);
+    }
+    const pil = []; for (let x = -H + 30; x <= H - 30; x += 60) for (const sz of [-1, 1]) pil.push({ x, z: zc + sz * (W + 1.6), ang: 0 });
+    const pg = new THREE.BoxGeometry(2.2, deckY, 2.2); pg.translate(0, deckY / 2, 0);
+    this.cityProps(pil, [{ geo: pg, mat: new THREE.MeshStandardMaterial({ color: 0x3a3e50, roughness: 0.8 }), cast: true, recv: true }], 700, 120);
+    for (const p of pil) this.statics.addCircle(p.x, p.z, 1.3, 'post');
+  }
+
   buildTokyoDecor(signs, lines, S, H, W, rnd) {
     const TS = TX.tokyoSignTextures();
     const q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), m4 = new THREE.Matrix4();
@@ -928,11 +993,11 @@ export class World {
     for (const s of signs) { const key = (s.vert ? 'v' : 'h') + s.k; (groups.get(key) || groups.set(key, []).get(key)).push(s); }
     for (const [key, list] of groups) {
       const vert = key[0] === 'v', tex = (vert ? TS.vert : TS.horiz)[+key.slice(1)];
-      const mat = new THREE.MeshBasicMaterial({ map: tex, color: new THREE.Color(1.9, 1.9, 1.9), side: THREE.DoubleSide, fog: true });
+      const mat = new THREE.MeshBasicMaterial({ map: tex, color: new THREE.Color(1.9, 1.9, 1.9), side: THREE.FrontSide, fog: true }); // front only: from behind the text would read mirrored
       const im = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), mat, list.length);
       list.forEach((s, i) => {
         const o = sideOff(s, 0.35); q.setFromAxisAngle(up, o[2]);
-        const w = vert ? 3 : 12 + (i % 3) * 3, h = vert ? 12 + (i % 3) * 3 : 6 + (i % 3) * 1.5;
+        const w = s.big ? Math.min(34, (s.side % 2 ? s.d : s.w) * 0.85) : vert ? 3 : 12 + (i % 3) * 3, h = s.big ? 17 : vert ? 12 + (i % 3) * 3 : 6 + (i % 3) * 1.5;
         m4.compose(new THREE.Vector3(s.x + o[0], s.y + h / 2, s.z + o[1]), q, new THREE.Vector3(w, h, 1)); im.setMatrixAt(i, m4);
       });
       im.computeBoundingSphere(); this.root.add(im);

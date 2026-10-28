@@ -7,7 +7,10 @@ export const CONN_HALF_W = 10;
 
 export function loopRadius(t, mapId = currentMap) {
   if (mapId === 'tokyo') {
-    return 1340 + 115 * Math.cos(2 * t - 0.35) + 55 * Math.sin(5 * t + 0.85) + 24 * Math.sin(9 * t - 1.1);
+    // Distinct Tokyo Wangan + Touge silhouette: flatter high-speed Wangan straight over Tokyo Bay on the east (cos(t)>0),
+    // sweeping deep into the Hakone/Haruna mountain S-curves on the west (cos(t)<0).
+    const eastFlat = Math.max(0, Math.cos(t));
+    return 1290 - 150 * eastFlat * eastFlat + 140 * Math.cos(2 * t) + 75 * Math.sin(3 * t - 0.4) + 42 * Math.sin(6 * t + 0.9) * (1 - 0.7 * eastFlat);
   }
   return 1320 + 110 * Math.sin(3 * t + 0.5) + 50 * Math.sin(7 * t + 1.3) + 22 * Math.sin(11 * t + 2.1);
 }
@@ -138,12 +141,12 @@ export function buildRoads(mapId = currentMap) {
   let loopPts = resample(dense, 10);
   loopPts.pop(); // closed
   for (const p of loopPts) {
-    const minH = isTokyo && p.x > 980 ? lerp(3.5, 8, sstep(980, 1220, p.x)) : 3;
+    const minH = isTokyo && p.x > 480 ? lerp(5, 16, sstep(480, 780, p.x)) : 3;
     p.h = Math.max(rawHeight(p.x, p.z, mapId), minH);
   }
   smoothHeights(loopPts, true, 10, 4);
   for (const p of loopPts) {
-    const minH = isTokyo && p.x > 980 ? lerp(3.5, 8, sstep(980, 1220, p.x)) : 3.5;
+    const minH = isTokyo && p.x > 480 ? lerp(5, 15, sstep(480, 780, p.x)) : 3.5;
     p.h = Math.max(p.h, minH);
   }
   const loop = { name: isTokyo ? 'WANGAN EXPRESSWAY' : 'COAST HIGHWAY', pts: loopPts, halfW: LOOP_HALF_W, closed: true, kind: 'highway' };
@@ -158,12 +161,12 @@ export function buildRoads(mapId = currentMap) {
 
   // ---- Connectors ----
   const connDefs = isTokyo ? [
-    { tag: 'north', name: 'SHINJUKU DORI', jp: '新宿通り', s: { x: 0, z: -CITY_HALF }, dir: { x: 0, z: -1 }, ang: -Math.PI / 2, wig: 65, freq: 1 },
-    { tag: 'south', name: 'SHIBUYA DORI', jp: '渋谷通り', s: { x: 0, z: CITY_HALF }, dir: { x: 0, z: 1 }, ang: Math.PI / 2, wig: -75, freq: 1 },
-    { tag: 'east', name: 'RAINBOW BRIDGE', jp: 'レインボーブリッジ', s: { x: CITY_HALF, z: 0 }, dir: { x: 1, z: 0 }, ang: 0, wig: 35, freq: 1 },
-    { tag: 'west', name: 'HAKONE TOUGE', jp: '箱根峠', s: { x: -CITY_HALF, z: 0 }, dir: { x: -1, z: 0 }, ang: Math.PI, wig: -80, freq: 2 },
-    { tag: 'nw', name: 'HARUNA PASS', jp: '榛名山', s: { x: -CITY_HALF, z: -CITY_HALF }, dir: { x: -0.7071, z: -0.7071 }, ang: -Math.PI * 0.75, wig: 105, freq: 3 },
-    { tag: 'se', name: 'ODAIBA BAYWAY', jp: 'お台場湾岸', s: { x: CITY_HALF, z: CITY_HALF }, dir: { x: 0.7071, z: 0.7071 }, ang: Math.PI * 0.25, wig: 60, freq: 2 },
+    { tag: 'north', name: 'SHINJUKU DORI', jp: '新宿通り', s: { x: 0, z: -CITY_HALF }, dir: { x: 0, z: -1 }, ang: -Math.PI / 2, wig: 75, freq: 1 },
+    { tag: 'south', name: 'SHIBUYA DORI', jp: '渋谷通り', s: { x: 0, z: CITY_HALF }, dir: { x: 0, z: 1 }, ang: Math.PI / 2, wig: -80, freq: 1 },
+    { tag: 'east', name: 'RAINBOW BRIDGE', jp: 'レインボーブリッジ', s: { x: CITY_HALF, z: 0 }, dir: { x: 1, z: 0 }, ang: 0, wig: 15, freq: 1 },
+    { tag: 'west', name: 'HAKONE TOUGE', jp: '箱根峠', s: { x: -CITY_HALF, z: 0 }, dir: { x: -1, z: 0 }, ang: Math.PI, wig: -115, freq: 3 },
+    { tag: 'nw', name: 'HARUNA PASS', jp: '榛名山', s: { x: -CITY_HALF, z: -CITY_HALF }, dir: { x: -0.7071, z: -0.7071 }, ang: -Math.PI * 0.75, wig: 120, freq: 3 },
+    { tag: 'se', name: 'ODAIBA BAYWAY', jp: 'お台場湾岸', s: { x: CITY_HALF, z: CITY_HALF }, dir: { x: 0.7071, z: 0.7071 }, ang: Math.PI * 0.25, wig: 45, freq: 1 },
   ] : [
     { tag: 'north', name: 'NORTH AVE', s: { x: 0, z: -CITY_HALF }, dir: { x: 0, z: -1 }, ang: -Math.PI / 2, wig: 60, freq: 1 },
     { tag: 'south', name: 'SOUTH AVE', s: { x: 0, z: CITY_HALF }, dir: { x: 0, z: 1 }, ang: Math.PI / 2, wig: -70, freq: 1 },
@@ -211,7 +214,12 @@ export function buildRoads(mapId = currentMap) {
     pts.forEach((p, i) => {
       const t = i / (pts.length - 1);
       p.h += lerp(t0, t1, t);
-      if (i >= 12) p.h = Math.max(p.h, isTokyo && p.x > 950 ? lerp(4, 8, sstep(950, 1180, p.x)) : 2.5);
+      if (isTokyo && p.x > 550) {
+        const arch = Math.sin(clamp((p.x - 560) / 520, 0, 1) * Math.PI) * (c.tag === 'east' ? 7 : 3);
+        p.h = Math.max(p.h, lerp(3, 15.5, sstep(550, 740, p.x)) + arch);
+      } else if (i >= 12) {
+        p.h = Math.max(p.h, 2.5);
+      }
     });
     for (let i = 0; i < Math.min(8, pts.length); i++) pts[i].h *= i / 8;
     driveableProfile(pts, 0.085, 1);

@@ -46,19 +46,48 @@ export function asphaltTexture() {
 }
 
 // Highway / connector texture. u across road, v along.
-export function roadTexture(lanesPerDir, highway) {
+export function roadTexture(lanesPerDir, highway, tokyo = false) {
   const W = 512, H = 1024;
   const c = canvas(W, H), ctx = c.getContext('2d');
-  noiseFill(ctx, W, H, [52, 52, 56], 24, 21);
+  noiseFill(ctx, W, H, tokyo ? [28, 30, 38] : [52, 52, 56], tokyo ? 18 : 24, tokyo ? 88 : 21);
   // tire wear darker bands
   const laneW = (W * 0.86) / (lanesPerDir * 2);
   const x0 = W * 0.07;
   for (let l = 0; l < lanesPerDir * 2; l++) {
     for (const f of [0.28, 0.72]) {
       const g = ctx.createLinearGradient(x0 + laneW * (l + f) - 14, 0, x0 + laneW * (l + f) + 14, 0);
-      g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(0.5, 'rgba(10,10,12,0.28)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+      g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(0.5, tokyo ? 'rgba(4,6,14,0.42)' : 'rgba(10,10,12,0.28)'); g.addColorStop(1, 'rgba(0,0,0,0)');
       ctx.fillStyle = g; ctx.fillRect(x0 + laneW * (l + f) - 14, 0, 28, H);
     }
+  }
+  if (tokyo) {
+    // Japanese Shuto Expressway / Touge markings: red deceleration shoulder bars, crisp white edge lines, white/amber center divider & diamond ◇ symbols
+    ctx.fillStyle = highway ? 'rgba(0,220,255,0.22)' : 'rgba(220,40,50,0.35)';
+    for (let y = 0; y < H; y += 32) { ctx.fillRect(x0 - 24, y, 14, 18); ctx.fillRect(W - x0 + 10, y, 14, 18); }
+    ctx.fillStyle = '#f0f4ff';
+    ctx.fillRect(x0 - 8, 0, 7, H); ctx.fillRect(W - x0 + 1, 0, 7, H);
+    // center median line (white + amber reflector strip on Shuto, orange touge line on mountain roads)
+    ctx.fillStyle = highway ? '#f0f4ff' : '#ff9818';
+    ctx.fillRect(W / 2 - 8, 0, 5, H); ctx.fillRect(W / 2 + 3, 0, 5, H);
+    if (highway) {
+      ctx.fillStyle = '#00e5ff';
+      for (let y = 0; y < H; y += 128) ctx.fillRect(W / 2 - 2, y + 20, 4, 48);
+    }
+    ctx.fillStyle = '#e8f0ff';
+    for (let l = 1; l < lanesPerDir * 2; l++) {
+      if (l === lanesPerDir) continue;
+      const x = x0 + laneW * l;
+      for (let y = 0; y < H; y += 256) ctx.fillRect(x - 3, y, 6, 110);
+    }
+    // Japanese road diamond ◇ marking in lanes
+    ctx.strokeStyle = 'rgba(240,245,255,0.55)'; ctx.lineWidth = 4;
+    for (let l = 0; l < lanesPerDir * 2; l++) {
+      const cx = x0 + laneW * (l + 0.5), cy = (l % 2) * 512 + 256;
+      ctx.beginPath(); ctx.moveTo(cx, cy - 38); ctx.lineTo(cx + 14, cy); ctx.lineTo(cx, cy + 38); ctx.lineTo(cx - 14, cy); ctx.closePath(); ctx.stroke();
+    }
+    ctx.fillStyle = 'rgba(22,24,34,0.95)';
+    ctx.fillRect(0, 0, x0 - 28, H); ctx.fillRect(W - x0 + 28, 0, x0 - 28, H);
+    return tex(c);
   }
   // edge lines
   ctx.fillStyle = '#e8e8e0';

@@ -20,21 +20,28 @@ export function setTerrainMap(m) { currentMap = m || 'coast'; }
 
 export function rawHeight(x, z, mapId = currentMap) {
   const dCity = Math.max(Math.abs(x), Math.abs(z));
-  const mask = smoothstep(680, 1050, dCity);
+  const mask = smoothstep(640, 980, dCity);
   if (mapId === 'tokyo') {
-    // Tokyo Night: flat Shinjuku/Shibuya basin, steep Hakone/Haruna volcanic ridges to the west/north, wide Tokyo Bay to the east
-    let h = (fbm(n4, x / 680, z / 680, 4) * 68 + 24 + fbm(n2, x / 190, z / 190, 3) * 11) * mask;
-    const e = Math.max(-x * 1.08, Math.abs(z) * 0.96);
-    const eastFade = 1 - smoothstep(980, 1380, x);
-    const me = smoothstep(1480, 2020, e) * eastFade;
-    h += me * (220 + 155 * fbm(n3, x / 240, z / 240, 4));
-    // Tokyo Bay cuts in closer on the east so Wangan Expressway & Rainbow Bridge span open water
-    const bay = x + 55 * Math.sin(z / 210) + 30 * Math.cos(z / 75);
-    const o = smoothstep(1060, 1290, bay);
-    h = lerp(h, -28, o);
+    // Tokyo Night: flat megacity basin (-620..520), wide Tokyo Bay across the entire eastern side (x > 520) with Odaiba island,
+    // and steep Mt. Hakone / Haruna volcanic mountains on the west and northwest.
+    let h = (fbm(n4, x / 620, z / 620, 4) * 74 + 26 + fbm(n2, x / 175, z / 175, 3) * 13) * mask;
+    // Steep western & northern volcanic touge ridges
+    const westMount = smoothstep(-520, -1450, x) * (0.65 + 0.35 * smoothstep(-600, 900, Math.abs(z)));
+    h += westMount * (165 + 135 * fbm(n3, (x + 300) / 230, z / 230, 4));
+    const borderMount = smoothstep(1450, 1980, Math.max(-x, Math.abs(z))) * (1 - smoothstep(450, 950, x));
+    h += borderMount * (210 + 140 * fbm(n3, x / 250, z / 250, 4));
+    // Tokyo Bay: comes right up to the eastern city waterfront (x ~ 540) so Rainbow Bridge & Wangan span open bay water
+    const bayEdge = 560 + 65 * Math.sin(z / 240) - 45 * Math.cos(z / 110);
+    const inBay = smoothstep(bayEdge - 50, bayEdge + 110, x);
+    h = lerp(h, -26, inBay);
+    // Odaiba / Daikoku artificial port island out in Tokyo Bay
+    const odDist = Math.hypot((x - 860) / 1.15, (z - 180) / 1.35);
+    const odaiba = 1 - smoothstep(155, 225, odDist);
+    h = lerp(h, 4.2, odaiba);
     return h;
   }
-  let h = (fbm(n1, x / 750, z / 750, 4) * 60 + 22 + fbm(n2, x / 210, z / 210, 3) * 9) * mask;
+  const maskCoast = smoothstep(680, 1050, dCity);
+  let h = (fbm(n1, x / 750, z / 750, 4) * 60 + 22 + fbm(n2, x / 210, z / 210, 3) * 9) * maskCoast;
   // mountains on west/north/south borders
   const e = Math.max(-x, Math.abs(z));
   const eastFade = 1 - smoothstep(1250, 1600, x);
