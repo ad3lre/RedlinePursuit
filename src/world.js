@@ -3,28 +3,71 @@ import * as THREE from 'three';
 import { Sky } from 'three/examples/jsm/objects/Sky.js';
 import { Lensflare, LensflareElement } from 'three/examples/jsm/objects/Lensflare.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { HeightField, WORLD_HALF, CITY_HALF, STREET_SPACING, STREET_HALF_W, HF_N, HF_CELL, WATER_LEVEL } from './terrain.js';
+import { HeightField, WORLD_HALF, CITY_HALF, STREET_SPACING, STREET_HALF_W, HF_N, HF_CELL, WATER_LEVEL, setTerrainMap } from './terrain.js';
 import { buildRoads, buildNav, LOOP_HALF_W } from './roads.js';
 import { StaticWorld } from './collision.js';
-import { mulberry32, makeNoise2D, fbm, smoothstep, clamp, nextFrame } from './util.js';
+import { mulberry32, makeNoise2D, fbm, smoothstep, clamp, lerp, nextFrame } from './util.js';
 import * as TX from './textures.js';
 import { ENV } from './envAssets.js';
 
 export const globalUniforms = { time: { value: 0 } };
 
+export const MAPS = {
+  tokyo: {
+    id: 'tokyo',
+    name: 'TOKYO NIGHT',
+    jp: '東京ナイト · 首都高湾岸線',
+    desc: 'Midnight Shinjuku neon district, Wangan Bay Bridge & Hakone mountain touge.',
+    exposure: 0.78,
+  },
+  coast: {
+    id: 'coast',
+    name: 'REDVIEW COAST',
+    jp: 'レッドビュー · コースト',
+    desc: 'Golden-hour coastal highway loop, downtown grid & alpine canyon pass.',
+    exposure: 0.62,
+  },
+};
+
 export class World {
-  constructor(renderer, scene) {
+  constructor(renderer, scene, mapId = 'coast') {
     this.renderer = renderer;
     this.scene = scene;
+    this.mapId = mapId in MAPS ? mapId : 'tokyo';
+    setTerrainMap(this.mapId);
+    this.root = new THREE.Group();
+    this.root.add(this.root);
     this.statics = new StaticWorld();
     this.hf = new HeightField();
     this.updaters = [];
   }
 
+  clearWorld() {
+    while (this.root.children.length) {
+      const obj = this.root.children[0];
+      this.root.remove(obj);
+    }
+    this.statics = new StaticWorld();
+    this.updaters = [];
+    this.cityChunks = [];
+    this.propChunks = [];
+    this.treeChunks = [];
+    this.poolTex = null;
+  }
+
+  async setMap(mapId, progress = () => {}) {
+    const next = mapId in MAPS ? mapId : 'tokyo';
+    this.mapId = next;
+    setTerrainMap(next);
+    this.clearWorld();
+    await this.build(progress);
+  }
+
   async build(progress = () => {}) {
+    setTerrainMap(this.mapId);
     progress(0.02, 'Generating road network…');
     await nextFrame();
-    this.net = buildRoads();
+    this.net = buildRoads(this.mapId);
     progress(0.08, 'Generating terrain…');
     await nextFrame();
     this.hf.build(this.net.roads);
@@ -57,7 +100,114 @@ export class World {
 
   // ---------------- Sky & lighting ----------------
   buildSky() {
-    const scene = this.scene;
+    const scene = this.root;
+    const isTokyo = this.mapId === 'tokyo';
+    if (isTokyo) {
+      const elev = THREE.MathUtils.degToRad(22), az = THREE.MathUtils.degToRad(-115);
+      const moon = new THREE.Vector3().setFromSphericalCoords(1, Math.PI / 2 - elev, az);
+      this.sunDir = moon.clone();
+
+      // Midnight sky dome with Tokyo neon horizon glow + moon halo
+      const domeGeo = new THREE.SphereGeometry(19000, 32, 20);
+      const domeMat = new THREE.ShaderMaterial({
+        side: THREE.BackSide,
+        depthWrite: false,
+        fog: false,
+        uniforms: { uMoon: { value: moon.clone() } },
+        vertexShader: 'varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+        fragmentShader: `
+          varying vec3 vDir; uniform vec3 uMoon;
+          void main(){
+            float y = clamp(vDir.y, 0.0, 1.0);
+            vec3 zenith = vec3(0.006, 0.010, 0.028);
+            vec3 mid = vec3(0.018, 0.022, 0.058);
+            vec3 hor = mix(vec3(0.09, 0.025, 0.11), vec3(0.02, 0.075, 0.13), 0.5 + 0.5 * vDir.x);
+            vec3 col = mix(hor, mid, smoothstep(0.0, 0.22, y));
+            col = mix(col, zenith, smoothstep(0.18, 0.75, y));
+            float md = max(dot(normalize(vDir), normalize(uMoon)), 0.0);
+            col += vec3(0.18, 0.28, 0.52) * pow(md, 18.0) * 0.7 + vec3(1.4, 1.6, 2.0) * smoothstep(0.9985, 0.9996, md);
+            gl_FragColor = vec4(col, 1.0);
+          }`,
+      });
+      const dome = new THREE.Mesh(domeGeo, domeMat);
+      scene.add(dome);
+      this.sky = dome;
+
+      // Starfield
+      const starCnt = 1600;
+      const starPos = new Float32Array(starCnt * 3);
+      const starCol = new Float32Array(starCnt * 3);
+      const srnd = mulberry32(9001);
+      for (let i = 0; i < starCnt; i++) {
+        const th = srnd() * Math.PI * 2;
+        const ph = Math.acos(0.12 + srnd() * 0.88);
+        const r = 17500;
+        starPos[i * 3] = Math.sin(ph) * Math.cos(th) * r;
+        starPos[i * 3 + 1] = Math.cos(ph) * r;
+        starPos[i * 3 + 2] = Math.sin(ph) * Math.sin(th) * r;
+        const b = 0.45 + srnd() * 0.55;
+        const tint = srnd();
+        starCol[i * 3] = b * (tint < 0.3 ? 1.1 : 0.85);
+        starCol[i * 3 + 1] = b * 0.92;
+        starCol[i * 3 + 2] = b * (tint > 0.6 ? 1.2 : 0.95);
+      }
+      const sGeo = new THREE.BufferGeometry();
+      sGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+      sGeo.setAttribute('color', new THREE.BufferAttribute(starCol, 3));
+      const stars = new THREE.Points(sGeo, new THREE.PointsMaterial({ size: 28, sizeAttenuation: false, vertexColors: true, transparent: true, opacity: 0.85, fog: false, depthWrite: false }));
+      scene.add(stars);
+
+      // Neon-infused PMREM environment cubemap so cars and wet asphalt reflect vibrant Tokyo neon
+      const pmrem = new THREE.PMREMGenerator(this.renderer);
+      const envScene = new THREE.Scene();
+      envScene.add(new THREE.Mesh(new THREE.SphereGeometry(1000, 24, 16), domeMat));
+      const g = new THREE.Mesh(new THREE.PlaneGeometry(4000, 4000), new THREE.MeshBasicMaterial({ color: 0x0c0e1c }));
+      g.rotation.x = -Math.PI / 2; g.position.y = -30; envScene.add(g);
+      const neonBands = [
+        [0, 120, -420, 260, 90, 0, new THREE.Color(2.6, 0.25, 1.4)],
+        [420, 110, 0, 260, 85, Math.PI / 2, new THREE.Color(0.2, 2.1, 2.8)],
+        [0, 130, 420, 260, 95, Math.PI, new THREE.Color(1.4, 0.4, 2.6)],
+        [-420, 105, 0, 240, 80, -Math.PI / 2, new THREE.Color(2.4, 1.4, 0.25)],
+        [300, 160, -300, 180, 110, Math.PI * 0.25, new THREE.Color(0.2, 2.5, 1.6)],
+        [-300, 150, 300, 180, 110, -Math.PI * 0.75, new THREE.Color(2.8, 0.3, 0.8)],
+      ];
+      for (const [nx, ny, nz, nw, nh, ry, nc] of neonBands) {
+        const m = new THREE.Mesh(new THREE.PlaneGeometry(nw, nh), new THREE.MeshBasicMaterial({ color: nc, side: THREE.DoubleSide }));
+        m.position.set(nx, ny, nz); m.rotation.y = ry;
+        envScene.add(m);
+      }
+      if (this.envMap) this.envMap.dispose();
+      this.envMap = pmrem.fromScene(envScene, 0.03).texture;
+      this.scene.environment = this.envMap;
+      pmrem.dispose();
+
+      this.scene.fog = new THREE.FogExp2(new THREE.Color(0.035, 0.042, 0.095), 0.00028);
+
+      const hemi = new THREE.HemisphereLight(0x4a6cc8, 0x2e1638, 1.05);
+      scene.add(hemi);
+      const dl = new THREE.DirectionalLight(0x94beff, 1.65);
+      dl.position.copy(moon).multiplyScalar(400);
+      dl.castShadow = true;
+      dl.shadow.mapSize.set(2048, 2048);
+      const S = 110;
+      Object.assign(dl.shadow.camera, { left: -S, right: S, top: S, bottom: -S, near: 1, far: 1200 });
+      dl.shadow.bias = -0.0004; dl.shadow.normalBias = 0.6;
+      scene.add(dl); scene.add(dl.target);
+      this.sunLight = dl;
+
+      const flareTex0 = TX.glowTexture('rgba(210,235,255,1)', 'rgba(80,140,255,0)', 256);
+      const flareTex1 = TX.glowTexture('rgba(140,200,255,0.45)', 'rgba(80,120,255,0)', 128);
+      const lf = new Lensflare();
+      lf.addElement(new LensflareElement(flareTex0, 220, 0, new THREE.Color(0.45, 0.6, 0.85)));
+      lf.addElement(new LensflareElement(flareTex1, 55, 0.55, new THREE.Color(0.15, 0.25, 0.45)));
+      lf.addElement(new LensflareElement(flareTex1, 85, 0.78, new THREE.Color(0.25, 0.12, 0.35)));
+      const flareHolder = new THREE.Object3D();
+      flareHolder.position.copy(moon).multiplyScalar(9000);
+      flareHolder.add(lf);
+      scene.add(flareHolder);
+      this.flare = flareHolder;
+      return;
+    }
     const sky = new Sky();
     sky.scale.setScalar(20000);
     const u = sky.material.uniforms;
@@ -79,11 +229,12 @@ export class World {
     // add a warm ground plane to env so reflections aren't black below horizon
     const g = new THREE.Mesh(new THREE.PlaneGeometry(4000, 4000), new THREE.MeshBasicMaterial({ color: 0x2a2320 }));
     g.rotation.x = -Math.PI / 2; g.position.y = -30; envScene.add(g);
+    if (this.envMap) this.envMap.dispose();
     this.envMap = pmrem.fromScene(envScene, 0.02).texture;
-    scene.environment = this.envMap;
+    this.scene.environment = this.envMap;
     pmrem.dispose();
 
-    scene.fog = new THREE.FogExp2(new THREE.Color(0.62, 0.46, 0.4), 0.00028);
+    this.scene.fog = new THREE.FogExp2(new THREE.Color(0.62, 0.46, 0.4), 0.00028);
 
     const hemi = new THREE.HemisphereLight(0x9fb4d8, 0x4a3a2a, 0.9);
     scene.add(hemi);
@@ -126,6 +277,7 @@ export class World {
 
   // ---------------- Terrain ----------------
   buildTerrain() {
+    const isTokyo = this.mapId === 'tokyo';
     const n = this.hf.n;
     const pos = new Float32Array(n * n * 3);
     const col = new Float32Array(n * n * 3);
@@ -133,9 +285,15 @@ export class World {
     const splat = new Float32Array(n * n * 4); // grass, rock, sand, meadow
     const nz = makeNoise2D(55), nz2 = makeNoise2D(66);
     const tmpN = new THREE.Vector3();
-    const cGrass1 = new THREE.Color(0.26, 0.34, 0.12), cGrass2 = new THREE.Color(0.5, 0.44, 0.22), cGrass3 = new THREE.Color(0.18, 0.28, 0.1);
-    const cRock = new THREE.Color(0.36, 0.32, 0.29), cSand = new THREE.Color(0.78, 0.68, 0.5), cDirt = new THREE.Color(0.42, 0.36, 0.28);
-    const cSnow = new THREE.Color(0.92, 0.93, 0.96), cWet = new THREE.Color(0.32, 0.29, 0.22), cCity = new THREE.Color(0.3, 0.3, 0.3);
+    const cGrass1 = isTokyo ? new THREE.Color(0.06, 0.12, 0.11) : new THREE.Color(0.26, 0.34, 0.12);
+    const cGrass2 = isTokyo ? new THREE.Color(0.10, 0.15, 0.16) : new THREE.Color(0.5, 0.44, 0.22);
+    const cGrass3 = isTokyo ? new THREE.Color(0.04, 0.09, 0.10) : new THREE.Color(0.18, 0.28, 0.1);
+    const cRock = isTokyo ? new THREE.Color(0.13, 0.14, 0.20) : new THREE.Color(0.36, 0.32, 0.29);
+    const cSand = isTokyo ? new THREE.Color(0.12, 0.14, 0.20) : new THREE.Color(0.78, 0.68, 0.5);
+    const cDirt = isTokyo ? new THREE.Color(0.11, 0.11, 0.15) : new THREE.Color(0.42, 0.36, 0.28);
+    const cSnow = isTokyo ? new THREE.Color(0.55, 0.64, 0.82) : new THREE.Color(0.92, 0.93, 0.96);
+    const cWet = isTokyo ? new THREE.Color(0.06, 0.08, 0.14) : new THREE.Color(0.32, 0.29, 0.22);
+    const cCity = isTokyo ? new THREE.Color(0.08, 0.09, 0.14) : new THREE.Color(0.3, 0.3, 0.3);
     const c = new THREE.Color();
     for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
       const k = j * n + i;
@@ -202,11 +360,12 @@ export class World {
     };
     const mesh = new THREE.Mesh(geo, mat);
     mesh.receiveShadow = true;
-    this.scene.add(mesh);
+    this.root.add(mesh);
     this.terrain = mesh;
   }
 
   buildFarLand() {
+    const isTokyo = this.mapId === 'tokyo';
     const size = 18000, res = 180;
     const geo = new THREE.PlaneGeometry(size, size, res, res);
     geo.rotateX(-Math.PI / 2);
@@ -225,22 +384,33 @@ export class World {
         h = h * (1 - eastness) + -40 * eastness;
       }
       p.setY(i, h);
-      c.setRGB(0.3, 0.28, 0.25).lerp(new THREE.Color(0.2, 0.26, 0.14), 0.4);
-      if (h > 480) c.lerp(new THREE.Color(0.9, 0.92, 0.95), smoothstep(480, 600, h));
+      if (isTokyo) {
+        c.setRGB(0.05, 0.06, 0.11).lerp(new THREE.Color(0.03, 0.07, 0.10), 0.4);
+        if (h > 480) c.lerp(new THREE.Color(0.38, 0.46, 0.65), smoothstep(480, 600, h));
+      } else {
+        c.setRGB(0.3, 0.28, 0.25).lerp(new THREE.Color(0.2, 0.26, 0.14), 0.4);
+        if (h > 480) c.lerp(new THREE.Color(0.9, 0.92, 0.95), smoothstep(480, 600, h));
+      }
       col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
     }
     geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
     geo.computeVertexNormals();
     const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 }));
     mesh.position.y = -0.5;
-    this.scene.add(mesh);
+    this.root.add(mesh);
   }
 
   buildWater() {
+    const isTokyo = this.mapId === 'tokyo';
     const nt = TX.waterNormalTexture();
     nt.repeat.set(600, 600);
     const mat = new THREE.MeshStandardMaterial({
-      color: 0x0d2a3a, roughness: 0.1, metalness: 0.1, normalMap: nt, normalScale: new THREE.Vector2(0.35, 0.35), envMapIntensity: 1.2,
+      color: isTokyo ? 0x050d1e : 0x0d2a3a,
+      roughness: isTokyo ? 0.06 : 0.1,
+      metalness: isTokyo ? 0.28 : 0.1,
+      normalMap: nt,
+      normalScale: new THREE.Vector2(0.35, 0.35),
+      envMapIntensity: isTokyo ? 1.85 : 1.2,
     });
     // anti-sparkle: ripples fade to a flat mirror with distance and roughness rises toward the horizon, so far water is calm instead of noisy
     mat.onBeforeCompile = (sh) => {
@@ -253,7 +423,7 @@ export class World {
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.y = WATER_LEVEL;
     mesh.receiveShadow = true;
-    this.scene.add(mesh);
+    this.root.add(mesh);
     this.updaters.push((dt, t) => { nt.offset.set(t * 0.004, t * 0.0025); });
   }
 
@@ -296,6 +466,7 @@ export class World {
     const A = ENV.pbr.asphalt; for (const t of [A.normalMap, A.roughnessMap, A.map]) { t.wrapS = t.wrapT = THREE.RepeatWrapping; }
     // the painted road canvas keeps lane markings; real asphalt detail (grain, cracks, normal, roughness) is multiplied in by a second UV set tiled in world metres
     const asphaltPatch = (mat, tile) => {
+      if (this.mapId === 'tokyo') { mat.metalness = 0.18; mat.envMapIntensity = 2.2; mat.color.setRGB(0.55, 0.57, 0.66); }
       mat.onBeforeCompile = (sh) => {
         sh.uniforms.tAsDiff = { value: A.map }; sh.uniforms.tAsNor = { value: A.normalMap }; sh.uniforms.tAsRough = { value: A.roughnessMap };
         sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec2 vAsUv;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvAsUv = vec2(position.x + position.z * 0.37, position.z - position.x * 0.21) / ' + tile.toFixed(1) + ';');
@@ -305,7 +476,7 @@ export class World {
           float asL = dot(asD, vec3(0.333)) * 1.9; float asL2 = dot(asD2, vec3(0.333)) * 1.9;
           float asPaint = smoothstep(0.55, 0.8, max(diffuseColor.r, max(diffuseColor.g, diffuseColor.b)));
           diffuseColor.rgb *= mix(clamp(asL * mix(0.8, 1.2, asL2 * 0.5), 0.45, 1.5), clamp(0.8 + asL * 0.25, 0.7, 1.15), asPaint);`)
-          .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = clamp(texture2D(tAsRough, vAsUv).g * 0.35 + 0.62, 0.45, 1.0);')
+          .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n' + (this.mapId === 'tokyo' ? 'roughnessFactor = clamp(texture2D(tAsRough, vAsUv).g * 0.3 + 0.1, 0.1, 0.42);' : 'roughnessFactor = clamp(texture2D(tAsRough, vAsUv).g * 0.35 + 0.62, 0.45, 1.0);'))
           .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
           { vec3 an = texture2D(tAsNor, vAsUv).xyz * 2.0 - 1.0; normal = normalize(normal + (tbn_fake(an)) * 0.55); }`)
           .replace('void main() {', 'vec3 tbn_fake(vec3 n){ return vec3(n.x, 0.0, n.y); }\nvoid main() {');
@@ -323,9 +494,9 @@ export class World {
       const g = this.ribbon(r.pts, r.closed, r.halfW + (hw ? 1.2 : 0.8), hw ? 0.14 : r.kind === 'ramp' ? 0.1 : 0.12, hw ? 36 : 30);
       const m = new THREE.Mesh(g, hw ? hwMat : r.kind === 'ramp' ? rampMat : cnMat);
       m.receiveShadow = true;
-      this.scene.add(m);
+      this.root.add(m);
       const sg = this.ribbon(r.pts, r.closed, r.halfW + 4, 0.06, 30);
-      const sm = new THREE.Mesh(sg, shoulderMat); sm.receiveShadow = true; this.scene.add(sm);
+      const sm = new THREE.Mesh(sg, shoulderMat); sm.receiveShadow = true; this.root.add(sm);
     }
     this.buildRails();
     this.buildHighwayLamps();
@@ -358,17 +529,17 @@ export class World {
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals();
     const mat = new THREE.MeshStandardMaterial({ color: 0xb8bcc0, metalness: 0.85, roughness: 0.35, side: THREE.DoubleSide });
     const beam = new THREE.Mesh(g, mat); beam.castShadow = true; beam.receiveShadow = true;
-    this.scene.add(beam);
+    this.root.add(beam);
     // posts
     const post = new THREE.BoxGeometry(0.15, 1.0, 0.15); post.translate(0, 0.5, 0);
     const pm = new THREE.InstancedMesh(post, new THREE.MeshStandardMaterial({ color: 0x777b80, metalness: 0.7, roughness: 0.5 }), n);
     const m4 = new THREE.Matrix4();
     for (let i = 0; i < n; i++) { const p = railPts[i]; m4.makeTranslation(p.x, p.h, p.z); pm.setMatrixAt(i, m4); }
-    this.scene.add(pm);
+    this.root.add(pm);
     // reflectors (orange cat-eyes that bloom in headlights)
     const refl = new THREE.InstancedMesh(new THREE.BoxGeometry(0.1, 0.1, 0.1), new THREE.MeshBasicMaterial({ color: new THREE.Color(3, 1.2, 0.2) }), Math.ceil(n / 3));
     for (let i = 0, k = 0; i < n; i += 3, k++) { const p = railPts[i]; m4.makeTranslation(p.x, p.h + 0.75, p.z); refl.setMatrixAt(k, m4); }
-    this.scene.add(refl);
+    this.root.add(refl);
     for (let i = 0; i < n; i++) { const a = railPts[i], b = railPts[(i + 1) % n]; this.statics.addSeg(a.x, a.z, b.x, b.z, 'rail'); }
     this.railPts = railPts;
   }
@@ -403,7 +574,7 @@ export class World {
       poles.setMatrixAt(k, m4); heads.setMatrixAt(k, m4); k++;
       pools.push({ x: r.x + Math.sin(ang) * 3.5, z: r.z + Math.cos(ang) * 3.5, y: p.h + 0.2, s: 13 });
     }
-    this.scene.add(poles, heads);
+    this.root.add(poles, heads);
     this.addLightPools(pools);
   }
 
@@ -415,7 +586,7 @@ export class World {
     const m4 = new THREE.Matrix4();
     list.forEach((p, i) => { m4.makeScale(p.s, 1, p.s).setPosition(p.x, p.y, p.z); im.setMatrixAt(i, m4); });
     im.renderOrder = 2;
-    this.scene.add(im);
+    this.root.add(im);
   }
 
   buildGantries() {
@@ -439,7 +610,7 @@ export class World {
         grp.position.set(p.x, p.h, p.z);
         grp.rotation.y = ang;
         grp.traverse((o) => { if (o.isMesh) o.castShadow = true; });
-        this.scene.add(grp);
+        this.root.add(grp);
         const rx = Math.cos(ang), rz = -Math.sin(ang);
         this.statics.addCircle(p.x + rx * span / 2, p.z + rz * span / 2, 0.5, 'post');
         this.statics.addCircle(p.x - rx * span / 2, p.z - rz * span / 2, 0.5, 'post');
@@ -451,10 +622,10 @@ export class World {
   buildCity() {
     const S = STREET_SPACING, H = CITY_HALF, W = STREET_HALF_W;
     const rnd = mulberry32(2024);
-    const scene = this.scene;
+    const scene = this.root;
     // ground asphalt
     const AS = ENV.pbr.asphalt; for (const t of [AS.map, AS.normalMap, AS.roughnessMap]) { t.repeat.set(1224 / 7, 1224 / 7); t.wrapS = t.wrapT = THREE.RepeatWrapping; }
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(1224, 1224), new THREE.MeshStandardMaterial({ map: AS.map, normalMap: AS.normalMap, normalScale: new THREE.Vector2(0.9, 0.9), roughnessMap: AS.roughnessMap, roughness: 1, color: 0xd0d0d0 }));
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(1224, 1224), new THREE.MeshStandardMaterial({ map: AS.map, normalMap: AS.normalMap, normalScale: new THREE.Vector2(0.9, 0.9), roughnessMap: AS.roughnessMap, roughness: this.mapId === 'tokyo' ? 0.3 : 1, metalness: this.mapId === 'tokyo' ? 0.2 : 0, envMapIntensity: this.mapId === 'tokyo' ? 2.2 : 1, color: this.mapId === 'tokyo' ? 0x6a6c7a : 0xd0d0d0 }));
     ground.rotation.x = -Math.PI / 2; ground.position.y = 0.04; ground.receiveShadow = true;
     scene.add(ground);
 
@@ -582,6 +753,7 @@ export class World {
     const tops = [];
     const beacons = [];
     const neon = [];
+    const s_tokyoSigns = [];
     bldg.forEach((b, i) => {
       // find what is under (previous with same center & larger)
       let y = 0.3;
@@ -595,10 +767,11 @@ export class World {
       col.set(b.color); bim.setColorAt(i, col);
       seeds[i * 2] = b.seed; seeds[i * 2 + 1] = b.style;
       if (y + b.h > 110 && b.w < 30) beacons.push([b.x, y + b.h + 0.6, b.z]);
-      if (y === 0.3 && b.h > 25 && rnd() < 0.35) {
+      if (y === 0.3 && b.h > 25 && rnd() < (this.mapId === 'tokyo' ? 0.9 : 0.35)) {
         const side = Math.floor(rnd() * 4);
         const hy = 8 + rnd() * Math.min(40, b.h - 16);
         const nc = [[4, 0.4, 2.2], [0.4, 2.5, 4], [4, 2.6, 0.3], [0.3, 3.5, 3], [4, 1.2, 3.2]][Math.floor(rnd() * 5)];
+        if (this.mapId === 'tokyo') { const k = Math.floor(rnd() * 6); s_tokyoSigns.push({ x: b.x, z: b.z, y: 6 + rnd() * Math.min(60, b.h - 10), side: Math.floor(rnd() * 4), w: b.w, d: b.d, k, vert: rnd() < 0.4 }); }
         neon.push({ x: b.x, z: b.z, y: hy, side, w: b.w, d: b.d, c: nc, sw: 4 + rnd() * 6, sh: 1.5 + rnd() * 3 });
       }
     });
@@ -675,6 +848,8 @@ export class World {
       scene.add(ni);
     }
 
+    if (this.mapId === 'tokyo') this.buildTokyoDecor(s_tokyoSigns, lines, S, H, W, rnd);
+
     // fountains
     for (const b of fountains) {
       const basin = new THREE.Mesh(new THREE.CylinderGeometry(12, 12.5, 1, 32), new THREE.MeshStandardMaterial({ color: 0x9a948a, roughness: 0.8 }));
@@ -707,23 +882,12 @@ export class World {
     const lampH = lampP.size.y;
     const headGeo = new THREE.BoxGeometry(0.5, 0.12, 1.1); headGeo.translate(0, lampH - 0.3, 1.9); // glowing luminaire out over the road
     const armGeo = new THREE.BoxGeometry(0.12, 0.12, 2.2); armGeo.translate(0, lampH - 0.15, 1.1);
-    const lampIms = lampP.parts.map((part) => new THREE.InstancedMesh(part.geo, part.mat, lampList.length));
-    const heads = new THREE.InstancedMesh(headGeo, headMat, lampList.length);
-    const q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), one = new THREE.Vector3(1, 1, 1);
-    const pools = [];
-    lampList.forEach((l, i) => {
-      q.setFromAxisAngle(up, l.ang);
-      m4.compose(new THREE.Vector3(l.x, 0.3, l.z), q, one);
-      for (const im of lampIms) im.setMatrixAt(i, m4);
-      heads.setMatrixAt(i, m4);
-      pools.push({ x: l.x + Math.sin(l.ang) * 2.5, z: l.z + Math.cos(l.ang) * 2.5, y: 0.08, s: 10 });
-    });
-    for (const im of lampIms) { im.castShadow = true; im.receiveShadow = true; im.computeBoundingSphere(); scene.add(im); }
-    const arms = new THREE.InstancedMesh(armGeo, new THREE.MeshStandardMaterial({ color: 0x2a2d30, metalness: 0.7, roughness: 0.5 }), lampList.length);
-    lampList.forEach((l, i) => { q.setFromAxisAngle(up, l.ang); m4.compose(new THREE.Vector3(l.x, 0.3, l.z), q, one); arms.setMatrixAt(i, m4); });
-    arms.castShadow = true; scene.add(arms);
-    scene.add(heads);
-    this.addLightPools(pools);
+    // perf: lamps are chunked spatially (frustum + shadow-frustum culling actually works) and distance-culled; heads stay visible further as glow points
+    const armMat = new THREE.MeshStandardMaterial({ color: 0x2a2d30, metalness: 0.7, roughness: 0.5 });
+    const lampParts = [...lampP.parts.map((p) => ({ geo: p.geo, mat: p.mat, cast: true, recv: true })), { geo: armGeo, mat: armMat, cast: true }];
+    this.cityProps(lampList, lampParts, 360, 300);
+    this.cityProps(lampList, [{ geo: headGeo, mat: headMat }], 800, 400);
+    this.addLightPools(lampList.map((l) => ({ x: l.x + Math.sin(l.ang) * 2.5, z: l.z + Math.cos(l.ang) * 2.5, y: 0.08, s: 10 })));
 
     // sidewalk props (decimated Poly Haven scans): bins at every block corner, short concrete barrier runs along busy block edges
     {
@@ -743,13 +907,9 @@ export class World {
           if (rnd() < 0.5) barList.push({ x: along, z: c + off, ang: Math.PI / 2 }); else barList.push({ x: c + off, z: along, ang: 0 });
         }
       }
+      // perf: small street furniture is chunked + culled at 220 m and does not cast into the sun shadow map (only receives)
       const put = (list, prop, solid) => {
-        const q2 = new THREE.Quaternion(), up2 = new THREE.Vector3(0, 1, 0), one2 = new THREE.Vector3(1, 1, 1), m2 = new THREE.Matrix4();
-        for (const part of prop.parts) {
-          const im = new THREE.InstancedMesh(part.geo, part.mat, list.length);
-          list.forEach((l, i) => { q2.setFromAxisAngle(up2, l.ang); m2.compose(new THREE.Vector3(l.x, 0.3, l.z), q2, one2); im.setMatrixAt(i, m2); });
-          im.castShadow = true; im.receiveShadow = true; im.computeBoundingSphere(); scene.add(im);
-        }
+        this.cityProps(list, prop.parts.map((p) => ({ geo: p.geo, mat: p.mat, cast: false, recv: true })), 200, 300);
         if (solid) for (const l of list) solid(l);
       };
       put(binList, ENV.bin, (l) => this.statics.addCircle(l.x, l.z, 0.55, 'post'));
@@ -757,6 +917,56 @@ export class World {
     }
 
     this.cityTrees = treeSpots;
+  }
+
+  // Tokyo Night: bilingual neon billboards on tower faces, vertical kanji banners, paper lanterns and glowing vending machines.
+  buildTokyoDecor(signs, lines, S, H, W, rnd) {
+    const TS = TX.tokyoSignTextures();
+    const q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), m4 = new THREE.Matrix4();
+    const sideOff = (s, off) => [[0, s.d / 2 + off, 0], [s.w / 2 + off, 0, Math.PI / 2], [0, -s.d / 2 - off, Math.PI], [-s.w / 2 - off, 0, -Math.PI / 2]][s.side];
+    const groups = new Map();
+    for (const s of signs) { const key = (s.vert ? 'v' : 'h') + s.k; (groups.get(key) || groups.set(key, []).get(key)).push(s); }
+    for (const [key, list] of groups) {
+      const vert = key[0] === 'v', tex = (vert ? TS.vert : TS.horiz)[+key.slice(1)];
+      const mat = new THREE.MeshBasicMaterial({ map: tex, color: new THREE.Color(1.9, 1.9, 1.9), side: THREE.DoubleSide, fog: true });
+      const im = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), mat, list.length);
+      list.forEach((s, i) => {
+        const o = sideOff(s, 0.35); q.setFromAxisAngle(up, o[2]);
+        const w = vert ? 3 : 12 + (i % 3) * 3, h = vert ? 12 + (i % 3) * 3 : 6 + (i % 3) * 1.5;
+        m4.compose(new THREE.Vector3(s.x + o[0], s.y + h / 2, s.z + o[1]), q, new THREE.Vector3(w, h, 1)); im.setMatrixAt(i, m4);
+      });
+      im.computeBoundingSphere(); this.root.add(im);
+    }
+    // paper lanterns strung along streets (red / orange emissive spheres, chunked + culled)
+    const lan = [];
+    for (const c of lines) for (let t = -H + 12; t <= H - 12; t += 24) {
+      if (rnd() < 0.35) continue;
+      const side = rnd() < 0.5 ? -1 : 1;
+      lan.push({ x: t, z: c + side * (W + 0.8), ang: 0 }); if (rnd() < 0.5) lan.push({ x: c + side * (W + 0.8), z: t, ang: 0 });
+    }
+    const lg = new THREE.SphereGeometry(0.45, 10, 8); lg.scale(1, 1.25, 1); lg.translate(0, 5.2, 0);
+    const lm = new THREE.MeshBasicMaterial({ color: new THREE.Color(3.4, 0.45, 0.25) });
+    const pole = new THREE.CylinderGeometry(0.05, 0.05, 5.2, 5); pole.translate(0, 2.6, 0);
+    this.cityProps(lan, [{ geo: lg, mat: lm }, { geo: pole, mat: new THREE.MeshStandardMaterial({ color: 0x1a1a22, roughness: 0.6 }) }], 260, 120);
+    // vending machines / konbini glow boxes at corners
+    const vend = [];
+    for (const x of lines) for (const z of lines) if (rnd() < 0.5) vend.push({ x: x + (W + 2.2), z: z + (W + 2.2), ang: rnd() * 6.28 });
+    const vg = new THREE.BoxGeometry(1, 2, 0.8); vg.translate(0, 1, 0);
+    this.cityProps(vend, [{ geo: vg, mat: new THREE.MeshBasicMaterial({ color: new THREE.Color(1.2, 2.4, 3.0) }) }], 200, 120);
+  }
+
+  // Instanced props split into CxC chunks; each chunk is distance-culled in update() (cullDist from the focus car).
+  cityProps(list, parts, cullDist, C) {
+    this.cityChunks ||= [];
+    const q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), one = new THREE.Vector3(1, 1, 1), m = new THREE.Matrix4(), p = new THREE.Vector3();
+    const buckets = new Map();
+    for (const l of list) { const k = Math.floor(l.x / C) * 1000 + Math.floor(l.z / C); let b = buckets.get(k); if (!b) buckets.set(k, (b = { items: [], cx: (Math.floor(l.x / C) + 0.5) * C, cz: (Math.floor(l.z / C) + 0.5) * C })); b.items.push(l); }
+    for (const b of buckets.values()) {
+      const ims = parts.map((pt) => { const im = new THREE.InstancedMesh(pt.geo, pt.mat, b.items.length); im.castShadow = !!pt.cast; im.receiveShadow = !!pt.recv; return im; });
+      b.items.forEach((l, i) => { q.setFromAxisAngle(up, l.ang); m.compose(p.set(l.x, 0.3, l.z), q, one); for (const im of ims) im.setMatrixAt(i, m); });
+      for (const im of ims) { im.computeBoundingSphere(); this.root.add(im); }
+      this.cityChunks.push({ cx: b.cx, cz: b.cz, ims, d: cullDist + C * 0.71, on: true });
+    }
   }
 
   buildingMaterial() {
@@ -801,9 +1011,9 @@ export class World {
         roughnessFactor = mix(roughnessFactor, 0.16, max(bWin, bShop));`)
         .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         vec3 warm = mix(vec3(1.0, 0.7, 0.4), vec3(0.7, 0.85, 1.0), step(0.86, bRnd));
-        totalEmissiveRadiance += warm * bLit * (0.02 + bRnd * 0.1);
+        totalEmissiveRadiance += warm * bLit * (${this.mapId === 'tokyo' ? '0.5 + bRnd * 1.1' : '0.02 + bRnd * 0.1'});
         vec3 shopCol = mix(vec3(1.0, 0.55, 0.25), vec3(0.35, 0.75, 1.0), fract(vSeed.x * 13.0));
-        totalEmissiveRadiance += shopCol * bShop * 1.4 * step(0.25, fract(bu * 0.07 + vSeed.x));`);
+        totalEmissiveRadiance += shopCol * bShop * ${this.mapId === 'tokyo' ? '3.2' : '1.4'} * step(0.25, fract(bu * 0.07 + vSeed.x));`);
     };
     return m;
   }
@@ -845,7 +1055,7 @@ export class World {
       for (const b of buckets.values()) {
         const ims = geos.map((g, i) => new THREE.InstancedMesh(g, mats[i], b.length));
         b.forEach((t, i) => { setup(t, m4); for (const im of ims) im.setMatrixAt(i, m4); if (t.col) { ims[ims.length - 1].setColorAt(i, t.col); } });
-        for (const im of ims) { im.castShadow = cast; im.receiveShadow = true; im.computeBoundingSphere(); this.scene.add(im); }
+        for (const im of ims) { im.castShadow = cast; im.receiveShadow = true; im.computeBoundingSphere(); this.root.add(im); }
       }
     };
     // High-detail trees: 3 hand-grown variants per species (bark-textured trunks + alpha-cut needle / leaf cards), instanced per spatial chunk.
@@ -864,12 +1074,12 @@ export class World {
           const tr = new THREE.InstancedMesh(variants[v].trunk, barkMat, items.length), fo = new THREE.InstancedMesh(variants[v].foliage, leafMat, items.length);
           items.forEach((t, i) => { q.setFromAxisAngle(up, t.rot); sc.set(t.s, yScale(t), t.s); p.set(t.x, t.h - 0.25, t.z); m4.compose(p, q, sc); tr.setMatrixAt(i, m4); fo.setMatrixAt(i, m4); fo.setColorAt(i, t.tint); });
           tr.castShadow = true; tr.receiveShadow = true; fo.castShadow = true; fo.receiveShadow = false;
-          for (const im of [tr, fo]) { im.computeBoundingSphere(); im.visible = false; this.scene.add(im); hi.push(im); }
+          for (const im of [tr, fo]) { im.computeBoundingSphere(); im.visible = false; this.root.add(im); hi.push(im); }
           fo.instanceColor.needsUpdate = true;
         }
         const lm = new THREE.InstancedMesh(lodGeo, ENV.lodMat, bk.items.length);
         bk.items.forEach((t, i) => { q.setFromAxisAngle(up, t.rot); sc.set(t.s, yScale(t), t.s); p.set(t.x, t.h - 0.25, t.z); m4.compose(p, q, sc); lm.setMatrixAt(i, m4); lm.setColorAt(i, t.tint.clone().multiplyScalar(1.5)); });
-        lm.castShadow = false; lm.receiveShadow = true; lm.computeBoundingSphere(); this.scene.add(lm); lo.push(lm);
+        lm.castShadow = false; lm.receiveShadow = true; lm.computeBoundingSphere(); this.root.add(lm); lo.push(lm);
         this.treeChunks.push({ cx: bk.cx, cz: bk.cz, hi, lo, state: -1 });
       }
     };
@@ -882,17 +1092,18 @@ export class World {
       if (r.s > 1.2) this.statics.addCircle(r.x, r.z, r.s * 0.7, 'rock');
     }
     this.propChunks = [];
-    const scatter = (list, prop, cullDist = 0) => {
+    const scatter = (list, prop, cullDist = 0, cast = !cullDist) => {
       const C = cullDist ? 300 : CH, buckets = new Map();
       for (const r of list) { const k = Math.floor(r.x / C) * 1000 + Math.floor(r.z / C); let bk = buckets.get(k); if (!bk) buckets.set(k, (bk = { items: [], cx: (Math.floor(r.x / C) + 0.5) * C, cz: (Math.floor(r.z / C) + 0.5) * C })); bk.items.push(r); }
       for (const bk of buckets.values()) {
         const ims = prop.parts.map((part) => new THREE.InstancedMesh(part.geo, part.mat, bk.items.length));
         bk.items.forEach((r, i) => { q.setFromEuler(r.e); p.set(r.x, r.h - 0.1 * r.sc.y, r.z); m4.compose(p, q, r.sc); for (const im of ims) im.setMatrixAt(i, m4); });
-        for (const im of ims) { im.castShadow = !cullDist; im.receiveShadow = true; im.computeBoundingSphere(); this.scene.add(im); }
+        for (const im of ims) { im.castShadow = cast; im.receiveShadow = true; im.computeBoundingSphere(); this.root.add(im); }
         if (cullDist) this.propChunks.push({ cx: bk.cx, cz: bk.cz, ims, d: cullDist, on: true });
       }
     };
-    scatter(rocks.filter((r) => !r.big), ENV.rock); scatter(rocks.filter((r) => r.big), ENV.boulder);
+    // perf: scan rocks are ~2k tris each; small rocks vanish past ~450 m, boulders past ~750 m (fog hides both), still casting near the car
+    scatter(rocks.filter((r) => !r.big), ENV.rock, 300, true); scatter(rocks.filter((r) => r.big), ENV.boulder, 600, true);
     // undergrowth: shrubs + ferns near trees (denser under broadleaf / lowland), instanced per chunk, no collision
     {
       const under = [], ferns = [];
@@ -931,14 +1142,14 @@ export class World {
     ctx.drawImage(tmp, 0, 0, S, S);
     const tx = (x) => (x + WORLD_HALF) * sc;
     // city blocks
-    ctx.fillStyle = '#2b3036';
+    ctx.fillStyle = this.mapId === 'tokyo' ? '#1a1830' : '#2b3036';
     ctx.fillRect(tx(-612), tx(-612), 1224 * sc, 1224 * sc);
     ctx.fillStyle = '#15181c';
     for (let i = -CITY_HALF; i < CITY_HALF; i += STREET_SPACING) for (let j = -CITY_HALF; j < CITY_HALF; j += STREET_SPACING)
       ctx.fillRect(tx(i + 10), tx(j + 10), 100 * sc, 100 * sc);
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     for (const r of this.net.roads) {
-      ctx.strokeStyle = r.kind === 'highway' ? '#8f9aa6' : '#727c86';
+      ctx.strokeStyle = this.mapId === 'tokyo' ? (r.kind === 'highway' ? '#ff4fb4' : '#3fd8ff') : (r.kind === 'highway' ? '#8f9aa6' : '#727c86');
       ctx.lineWidth = r.halfW * 2 * sc * 1.2;
       ctx.beginPath();
       r.pts.forEach((p, i) => (i ? ctx.lineTo(tx(p.x), tx(p.z)) : ctx.moveTo(tx(p.x), tx(p.z))));
@@ -954,6 +1165,7 @@ export class World {
     for (const u of this.updaters) u(dt, t);
     const f = this.focus;
     if (f && this.propChunks) for (const c of this.propChunks) { const on = Math.hypot(c.cx - f.x, c.cz - f.z) < c.d + 150; if (on !== c.on) { c.on = on; for (const m of c.ims) m.visible = on; } }
+    if (f && this.cityChunks) for (const c of this.cityChunks) { const on = Math.hypot(c.cx - f.x, c.cz - f.z) < c.d; if (on !== c.on) { c.on = on; for (const m of c.ims) m.visible = on; } }
     // tree LOD: full-detail trees only near the camera; far chunks use cheap vertex-coloured trees
     if (f && this.treeChunks) for (const c of this.treeChunks) {
       const d = Math.hypot(c.cx - f.x, c.cz - f.z), want = d < 330 ? 1 : 0;
