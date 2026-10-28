@@ -553,7 +553,24 @@ $('btn-res-menu').onclick = () => backToMenu();
 // Everyone is in one room. The menu / garage / car picking are the normal single-player screens: START there = "ready".
 // The room owner launches the session with GO (button or G). Until then ready players see "N players ready".
 const net = new Net();
-let mpName = localStorage.getItem('redline-name') || 'RACER' + Math.floor(Math.random() * 900 + 100);
+// Player name: typed on the main menu, kept in localStorage, sent to the relay (which applies the same character rules and 14-char cap).
+const cleanName = (s) => String(s || '').replace(/[^\w \-.!?]/g, '').replace(/\s+/g, ' ').trim().slice(0, 14);
+const defaultName = 'RACER' + Math.floor(Math.random() * 900 + 100);
+let mpName = cleanName(localStorage.getItem('redline-name')) || defaultName;
+const nameEl = $('player-name');
+function commitName() {
+  const v = cleanName(nameEl.value) || (cleanName(localStorage.getItem('redline-name')) || defaultName);
+  const changed = v !== mpName;
+  mpName = v; nameEl.value = v;
+  try { localStorage.setItem('redline-name', v); } catch (e) { /* private mode */ }
+  if (changed && net.connected) net.send({ t: 'hello', name: mpName });
+}
+nameEl.value = mpName;
+nameEl.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter' || e.key === 'Escape') nameEl.blur(); }); // typing must never drive the menu / game
+nameEl.addEventListener('keyup', (e) => e.stopPropagation());
+nameEl.addEventListener('input', () => { const c = nameEl.value.replace(/[^\w \-.!?]/g, ''); if (c !== nameEl.value) nameEl.value = c; });
+nameEl.addEventListener('change', commitName);
+nameEl.addEventListener('blur', commitName);
 let room = null, myRole = 'racer', sentReady = false, waiting = false;
 const roleFor = (mode) => (mode === 'cop' ? 'cop' : 'racer');
 function setWait(text) { const e = $('wait-banner'); if (!e) return; e.textContent = text || ''; e.classList.toggle('hidden', !text); }
@@ -570,7 +587,7 @@ function refreshWait() {
 async function netConnect() {
   try { await net.connect(); net.send({ t: 'hello', name: mpName }); } catch (e) { /* offline: single player still works, START falls back to a local game */ }
 }
-function sendReady() { sentReady = true; net.send({ t: 'ready', name: mpName, mode: selMode, role: roleFor(selMode), car: selCar }); }
+function sendReady() { commitName(); sentReady = true; net.send({ t: 'ready', name: mpName, mode: selMode, role: roleFor(selMode), car: selCar }); }
 function leaveRoom() { waiting = false; sentReady = false; net.send({ t: 'menu' }); refreshWait(); }
 function goNow() { if (waiting && isOwner()) net.send({ t: 'go' }); }
 net.on((m) => {

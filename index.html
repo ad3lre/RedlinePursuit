@@ -188,6 +188,11 @@ button:focus { outline: none; }
 #wait-banner { position: fixed; left: 50%; bottom: 120px; transform: translateX(-50%); z-index: 60; padding: 10px 22px; background: rgba(8,10,14,0.82); border: 1px solid var(--line); color: #fff; font: 700 18px Rajdhani, sans-serif; letter-spacing: 0.12em; pointer-events: none; }
 #btn-go { position: fixed; left: 50%; bottom: 60px; transform: translateX(-50%); z-index: 61; min-width: 160px; font-size: 22px; }
 #wait-banner.hidden, #btn-go.hidden { display: none; }
+.namebox { margin: 16px 0 4px; display: flex; flex-direction: column; gap: 6px; }
+.namebox label { font: 700 12px Rajdhani, sans-serif; letter-spacing: 0.3em; color: var(--acc); }
+.namebox input { background: rgba(255,255,255,0.06); border: 1px solid var(--line); color: #fff; padding: 10px 14px; font: 700 20px Rajdhani, sans-serif; letter-spacing: 0.12em; text-transform: none; outline: none; width: 100%; box-sizing: border-box; clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px)); }
+.namebox input:focus { border-color: var(--acc); background: rgba(255,255,255,0.1); }
+.namebox small { color: #8a93a6; font-size: 12px; letter-spacing: 0.06em; }
 #spec-banner { position: fixed; left: 50%; top: 74px; transform: translateX(-50%); z-index: 60; display: flex; align-items: center; gap: 14px; padding: 8px 14px; background: rgba(8,10,14,0.82); border: 1px solid var(--line); color: #fff; font: 700 16px Rajdhani, sans-serif; letter-spacing: 0.1em; }
 #spec-banner.hidden { display: none; }
 #spec-banner > div { display: flex; flex-direction: column; align-items: center; min-width: 260px; }
@@ -249,6 +254,7 @@ button:focus { outline: none; }
       <button class="mode" data-mode="race"><b>HOT PURSUIT RACE</b><span>Race 3 rivals as a street racer. Shake off the police and take 1st place.</span></button>
       <button class="mode cop" data-mode="cop"><b>INTERCEPTOR</b><span>Play as the police. Bust 4 illegal racers with spike strips and EMP.</span></button>
       <button class="mode free" data-mode="free"><b>FREE RUN</b><span>Roam the huge map freely. If a patrol spots you, escape.</span></button>
+      <div class="namebox"><label for="player-name">YOUR NAME</label><input id="player-name" type="text" maxlength="14" autocomplete="off" spellcheck="false" placeholder="Pick a name"><small>Shown to other players online. Letters, numbers, space and - . ! ?</small></div>
       <div class="links">
         <button class="btn" id="btn-settings">SETTINGS</button>
         <button class="btn" id="btn-controls">CONTROLS</button>

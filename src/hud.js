@@ -256,7 +256,7 @@ export class HUD {
       el.style.transform = `translate(${(v.x * 0.5 + 0.5) * W}px, ${(-v.y * 0.5 + 0.5) * H}px) translate(-50%, -100%)`;
       const cop = o.role === 'cop';
       el.className = 'mk ' + (cop ? 'cop' : 'racer');
-      el.querySelector('.mk-n').textContent = cop ? 'POLICE' : o.name;
+      el.querySelector('.mk-n').textContent = cop && !(o.net && o.net.human) ? 'POLICE' : o.name; // a human cop shows their own name
       el.querySelector('.mk-t').textContent = `${Math.round(d)}m`;
       const hb = el.querySelector('.mk-h');
       const showH = (g.mode === 'cop' && !cop) || (cop && d < 120) || (!cop && d < 150);

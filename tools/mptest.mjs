@@ -29,6 +29,17 @@ try {
   await sleep(1500);
   check('A connected in background', await A.evaluate(() => true));
   await A.click('#title'); await sleep(1200);
+  // ---- player names: type one on the main menu; keys typed there must not drive the menu; it persists and reaches the relay ----
+  const appBefore = await A.evaluate(() => [...document.querySelectorAll('.screen')].filter((e) => !e.classList.contains('hidden')).map((e) => e.id).join());
+  await A.click('#player-name', { clickCount: 3 }); await A.keyboard.type('Dr. Speed! <>wasd');
+  const typed = await A.evaluate(() => document.getElementById('player-name').value);
+  check('name box strips illegal characters and caps at 14', typed === 'Dr. Speed! was', typed);
+  check('typing in the name box does not navigate the menu', (await A.evaluate(() => [...document.querySelectorAll('.screen')].filter((e) => !e.classList.contains('hidden')).map((e) => e.id).join())) === appBefore);
+  await A.keyboard.press('Enter'); await sleep(300);
+  check('name saved to localStorage', (await A.evaluate(() => localStorage.getItem('redline-name'))) === 'Dr. Speed! was');
+  await A.click('#player-name', { clickCount: 3 }); await A.keyboard.type('Dr. Speed'); await A.keyboard.press('Enter'); await sleep(300);
+  check('name limited to 14 characters', await A.evaluate(() => { const i = document.getElementById('player-name'); i.value = 'ABCDEFGHIJKLMNOPQRS'; i.dispatchEvent(new Event('change')); return localStorage.getItem('redline-name').length === 14; }));
+  await A.click('#player-name', { clickCount: 3 }); await A.keyboard.type('Dr. Speed'); await A.keyboard.press('Enter'); await sleep(300);
   await A.click('[data-mode="race"]'); await sleep(2500);
   await A.click('#btn-start'); await sleep(1500);
   const banner = await A.evaluate(() => document.getElementById('wait-banner').textContent);
@@ -38,6 +49,7 @@ try {
   B.send(JSON.stringify({ t: 'ready', name: 'NODECOP', mode: 'cop', role: 'cop', car: 2 }));
   await sleep(1000);
   const room = blog.filter((m) => m.t === 'room').pop();
+  check('relay shows A under the typed name', !!room && room.players.some((p) => p.name === 'Dr. Speed'), JSON.stringify(room?.players?.map((p) => p.name)));
   check('relay sees 2 ready players', room && room.players.filter((p) => p.state !== 'menu').length === 2, JSON.stringify(room?.players?.map((p) => p.name + ':' + p.state + ':' + p.role)));
   const aIsHost = await A.evaluate(() => !document.getElementById('btn-go').classList.contains('hidden'));
   log('A owner (GO visible):', aIsHost, '| room host:', room?.host);
@@ -49,6 +61,8 @@ try {
   check('A in multiplayer game', gs.multi);
   check('A is a RACER (Race mode)', gs.mode === 'race');
   const bCar = gs.cars.find((c) => c.startsWith('NODECOP'));
+  check('B\'s car in A\'s world carries B\'s own name', gs.cars.some((c) => c.startsWith('NODECOP|')));
+  check('A\'s own car is named after the typed name', await A.evaluate(() => window.__rp.game.player.name === 'Dr. Speed'));
   check('B (cop) appears as a cop in A\'s world', !!bCar && bCar.includes('|cop|'), bCar);
   // same car for everyone: B asked for car index 2 (BRUISER) -> drawn with its own default colours, not recoloured
   // a human cop is drawn as the car they picked (bruiser) in the police livery - never swapped for another model or recoloured because it matches mine
