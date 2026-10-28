@@ -36,7 +36,7 @@ export class World {
     this.mapId = mapId in MAPS ? mapId : 'tokyo';
     setTerrainMap(this.mapId);
     this.root = new THREE.Group();
-    this.root.add(this.root);
+    this.scene.add(this.root);
     this.statics = new StaticWorld();
     this.hf = new HeightField();
     this.updaters = [];
@@ -154,7 +154,7 @@ export class World {
       const sGeo = new THREE.BufferGeometry();
       sGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
       sGeo.setAttribute('color', new THREE.BufferAttribute(starCol, 3));
-      const stars = new THREE.Points(sGeo, new THREE.PointsMaterial({ size: 28, sizeAttenuation: false, vertexColors: true, transparent: true, opacity: 0.85, fog: false, depthWrite: false }));
+      const stars = new THREE.Points(sGeo, new THREE.PointsMaterial({ size: 2.2, sizeAttenuation: false, vertexColors: true, transparent: true, opacity: 0.8, fog: false, depthWrite: false, map: TX.glowTexture('rgba(255,255,255,1)', 'rgba(255,255,255,0)', 32), alphaTest: 0.02 }));
       scene.add(stars);
 
       // Neon-infused PMREM environment cubemap so cars and wet asphalt reflect vibrant Tokyo neon
@@ -1011,9 +1011,9 @@ export class World {
         roughnessFactor = mix(roughnessFactor, 0.16, max(bWin, bShop));`)
         .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         vec3 warm = mix(vec3(1.0, 0.7, 0.4), vec3(0.7, 0.85, 1.0), step(0.86, bRnd));
-        totalEmissiveRadiance += warm * bLit * (${this.mapId === 'tokyo' ? '0.5 + bRnd * 1.1' : '0.02 + bRnd * 0.1'});
+        totalEmissiveRadiance += warm * bLit * (${this.mapId === 'tokyo' ? '0.16 + bRnd * 0.34' : '0.02 + bRnd * 0.1'});
         vec3 shopCol = mix(vec3(1.0, 0.55, 0.25), vec3(0.35, 0.75, 1.0), fract(vSeed.x * 13.0));
-        totalEmissiveRadiance += shopCol * bShop * ${this.mapId === 'tokyo' ? '3.2' : '1.4'} * step(0.25, fract(bu * 0.07 + vSeed.x));`);
+        totalEmissiveRadiance += shopCol * bShop * ${this.mapId === 'tokyo' ? '2.4' : '1.4'} * step(0.25, fract(bu * 0.07 + vSeed.x));`);
     };
     return m;
   }

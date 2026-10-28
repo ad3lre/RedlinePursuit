@@ -1,6 +1,6 @@
 // ===== Entry: renderer, loop, menus =====
 import * as THREE from 'three';
-import { World } from './world.js';
+import { World, MAPS } from './world.js';
 import { Post } from './post.js';
 import { CameraRig, CAM_MODES } from './camera.js';
 import { Input } from './input.js';
@@ -34,7 +34,10 @@ const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 14000);
 camera.position.set(0, 80, 300);
 
-const world = new World(renderer, scene);
+let selMap = 'coast';
+try { const m = new URLSearchParams(location.search).get('map') || localStorage.getItem('redline-map'); if (m && MAPS[m]) selMap = m; } catch (e) { /* ignore */ }
+const world = new World(renderer, scene, selMap);
+renderer.toneMappingExposure = MAPS[selMap].exposure;
 const input = new Input();
 const touch = new TouchControls(input);
 const audio = new AudioSys();
@@ -47,6 +50,30 @@ let game = null;
 const _sunV = new THREE.Vector3();
 let app = 'loading'; // loading | title | menu | garage | game | paused | result
 let selMode = 'race', selCar = 0;
+
+async function switchMap(id, silent = false) {
+  if (!MAPS[id] || (id === world.mapId && !silent)) { refreshMapUI(); return; }
+  const load = $('loading'), bar = $('load-bar'), txt = $('load-text');
+  load.classList.remove('hidden');
+  const wasApp = app; app = 'loading';
+  await new Promise((r) => setTimeout(r, 50));
+  game.clear(); game._route = null; game.demo = false;
+  await world.setMap(id, (p, t) => { bar.style.width = `${Math.round(p * 100)}%`; txt.textContent = MAPS[id].name + ' - ' + t; });
+  selMap = id; try { localStorage.setItem('redline-map', id); } catch (e) { /* ignore */ }
+  renderer.toneMappingExposure = MAPS[id].exposure;
+  applyQuality();
+  game.start('demo'); for (let i = 0; i < 3; i++) game.update(1 / 60);
+  renderer.compile(scene, camera);
+  load.classList.add('hidden');
+  app = wasApp === 'loading' ? 'menu' : wasApp;
+  demoShotT = 0;
+  refreshMapUI();
+}
+function refreshMapUI() {
+  document.querySelectorAll('.mapbtn').forEach((b) => b.classList.toggle('on', b.dataset.map === world.mapId));
+  const n = $('map-note'); if (n) n.textContent = MAPS[world.mapId].jp + ' - ' + MAPS[world.mapId].desc + (net.connected ? ' (online: the host\'s map is used)' : '');
+}
+document.querySelectorAll('.mapbtn').forEach((b) => { b.onclick = () => { audio.click(); if (!waiting) switchMap(b.dataset.map); }; });
 
 function applyQuality() {
   const q = settings.quality;
@@ -82,7 +109,8 @@ async function boot() {
   applyQuality();
   game = new Game({ renderer, scene, camera, world, audio, input, settings, rig, vfx, hud });
   game.onResult = showResult;
-  window.__rp = { game, rig, world, camera, post, input, settings, renderer, scene };
+  refreshMapUI();
+  window.__rp = { game, switchMap, rig, world, camera, post, input, settings, renderer, scene };
   // warm up: start demo so materials compile
   game.start('demo');
   for (let i = 0; i < 3; i++) { game.update(1 / 60); }
@@ -587,7 +615,7 @@ function refreshWait() {
 async function netConnect() {
   try { await net.connect(); net.send({ t: 'hello', name: mpName }); } catch (e) { /* offline: single player still works, START falls back to a local game */ }
 }
-function sendReady() { commitName(); sentReady = true; net.send({ t: 'ready', name: mpName, mode: selMode, role: roleFor(selMode), car: selCar }); }
+function sendReady() { commitName(); sentReady = true; net.send({ t: 'ready', name: mpName, mode: selMode, role: roleFor(selMode), car: selCar, map: world.mapId }); }
 function leaveRoom() { waiting = false; sentReady = false; net.send({ t: 'menu' }); refreshWait(); }
 function goNow() { if (waiting && isOwner()) net.send({ t: 'go' }); }
 net.on((m) => {
@@ -598,9 +626,10 @@ net.on((m) => {
   else if (m.t === 'assign') beginSession(m, true);
   else if (game && game.multi) game.onNet(m);
 });
-function beginSession(m, late = false) {
+async function beginSession(m, late = false) {
   if (!['garage', 'game', 'paused', 'result', 'menu'].includes(app)) return;
   waiting = false; refreshWait();
+  if (m.map && MAPS[m.map] && m.map !== world.mapId) { app = 'loading'; show(null); await switchMap(m.map); app = 'menu'; }
   audio.init(); audio.settings = settings; audio.applyVolumes();
   if (audio.music && !audio.music.started) { try { audio.music.start(); } catch (e) { /* */ } }
   show(null); hud.show(true); app = 'game';

@@ -81,8 +81,8 @@ export class Game {
   areaName(car) {
     const p = car.pos;
     if (Math.abs(p.x) < 640 && Math.abs(p.z) < 640) return 'downtown';
-    if (Math.hypot(p.x, p.z) > 1100) return p.x > 1000 ? 'the coast highway' : 'the highway';
-    return 'the hills';
+    if (Math.hypot(p.x, p.z) > 1100) return p.x > 1000 ? (this.world.mapId === 'tokyo' ? 'the Wangan bay bridge' : 'the coast highway') : 'the highway';
+    return this.world.mapId === 'tokyo' ? 'the Hakone touge' : 'the hills';
   }
 
   makeGate() {
@@ -128,9 +128,9 @@ export class Game {
     // letting A* choose them picked a ramp past the first loop waypoint and the route doubled back on itself (a 176 degree U-turn,
     // which made bots circle and the wrong-way / progress logic fight the player).
     const ramps = nav.ramps || [];
-    const pick = (name) => ramps.filter((r) => r.name.startsWith(name)).sort((a, b) => b.loopIndex - a.loopIndex)[0];
-    const pickLow = (name) => ramps.filter((r) => r.name.startsWith(name)).sort((a, b) => a.loopIndex - b.loopIndex)[0];
-    const entry = pickLow('NORTH AVE'), exit = pick('SOUTH AVE'); // entry merges heading with the race direction (lower index), exit leaves it (higher index)
+    const pick = (tag) => ramps.filter((r) => r.tag === tag).sort((a, b) => b.loopIndex - a.loopIndex)[0];
+    const pickLow = (tag) => ramps.filter((r) => r.tag === tag).sort((a, b) => a.loopIndex - b.loopIndex)[0];
+    const entry = pickLow('north'), exit = pick('south'); // entry merges heading with the race direction (lower index), exit leaves it (higher index)
     const wps = [C(0, 360), C(0, -600), entry.navIds[0], entry.navIds[entry.navIds.length - 1], L(-115), L(-135), L(-160), L(180), L(155), L(130), L(108), exit.navIds[exit.navIds.length - 1], exit.navIds[0], C(0, 600), C(360, 600), C(360, 240), C(120, 240), C(120, -120), C(-240, -120), C(-240, 120)];
     this._route = buildRoute(nav, wps);
     return this._route;
@@ -375,7 +375,7 @@ export class Game {
     if (!bot || !this.multi.net) return;
     bot.net.taken = m.from;
     const progress = bot.ai?.progress || 0;
-    this.multi.net.send({ t: 'assign', to: m.from, event: this.multi.event, sid: this.sid, host: this.multi.myId, players: [{ id: m.from, name: m.name, role: m.role, car: m.car, slot: 0 }], spawn: { x: bot.pos.x, z: bot.pos.z, yaw: bot.yaw, speed: bot.speed, progress }, takeBot: bot.net.id });
+    this.multi.net.send({ t: 'assign', to: m.from, event: this.multi.event, map: this.world.mapId, sid: this.sid, host: this.multi.myId, players: [{ id: m.from, name: m.name, role: m.role, car: m.car, slot: 0 }], spawn: { x: bot.pos.x, z: bot.pos.z, yaw: bot.yaw, speed: bot.speed, progress }, takeBot: bot.net.id });
     // that bot disappears here: the new player's own car (streamed from their client) replaces it
     this.netCars.delete(bot.net.id); this.racers = this.racers.filter((x) => x !== bot); this.removeCar(bot);
   }

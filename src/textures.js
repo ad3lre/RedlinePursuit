@@ -154,3 +154,69 @@ export function textTexture(text, opts = {}) {
   if (sub) { ctx.font = 'bold 34px Arial'; ctx.fillText(sub, w / 2, h * 0.75); }
   return tex(c, false, true);
 }
+
+let _tokyoSignCache = null;
+export function tokyoSignTextures() {
+  if (_tokyoSignCache) return _tokyoSignCache;
+  const H_SIGNS = [
+    { jp: '東京ナイト', en: 'TOKYO NIGHT · 首都高', bg1: '#180526', bg2: '#070a1c', fg: '#ff2aa4', sub: '#00f0ff', accent: '#ff2aa4' },
+    { jp: '湾岸ミッドナイト', en: 'WANGAN EXPRESS · C1', bg1: '#041428', bg2: '#020812', fg: '#00f0ff', sub: '#ffe640', accent: '#00f0ff' },
+    { jp: 'レッドライン', en: 'REDLINE DRIFT CLUB', bg1: '#26060c', bg2: '#0a0408', fg: '#ff3a3a', sub: '#ffae00', accent: '#ff3a3a' },
+    { jp: '渋谷スクランブル', en: 'SHIBUYA VISION 24H', bg1: '#0a0628', bg2: '#1d0832', fg: '#b84dff', sub: '#00ffcc', accent: '#00ffcc' },
+    { jp: '秋葉原サイバー', en: 'AKIBA CYBER ARCADE', bg1: '#051e1c', bg2: '#040a14', fg: '#00ff9d', sub: '#ff38b8', accent: '#00ff9d' },
+    { jp: '新宿歌舞伎町', en: 'KABUKICHO NEON PLAZA', bg1: '#280818', bg2: '#0c0410', fg: '#ffae00', sub: '#ff2a70', accent: '#ffae00' },
+  ];
+  const V_SIGNS = [
+    { chars: ['新', '宿', '夜', '景'], sub: 'SHINJUKU', bg: '#160420', fg: '#ff2a95', border: '#00f0ff' },
+    { chars: ['湾', '岸', '最', '速'], sub: 'WANGAN', bg: '#031224', fg: '#00f0ff', border: '#ffae00' },
+    { chars: ['渋', '谷', '電', '脳'], sub: 'SHIBUYA', bg: '#100528', fg: '#c44dff', border: '#ff2a95' },
+    { chars: ['一', '番', 'ラ', 'ー', 'メ', 'ン'], sub: 'RAMEN 24H', bg: '#260606', fg: '#ffe040', border: '#ff3030' },
+    { chars: ['ゲ', 'ー', 'ム', '天', '国'], sub: 'ARCADE', bg: '#041c18', fg: '#00ff95', border: '#00e5ff' },
+    { chars: ['東', '京', 'ドリ', 'フト'], sub: 'DRIFT', bg: '#1e0a04', fg: '#ff881a', border: '#ffe640' },
+  ];
+  const horiz = H_SIGNS.map((s) => {
+    const W = 512, H = 256;
+    const c = canvas(W, H), ctx = c.getContext('2d');
+    const g = ctx.createLinearGradient(0, 0, W, H);
+    g.addColorStop(0, s.bg1); g.addColorStop(1, s.bg2);
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    // scanlines
+    ctx.fillStyle = 'rgba(255,255,255,0.04)';
+    for (let y = 0; y < H; y += 6) ctx.fillRect(0, y, W, 2);
+    // neon frame
+    ctx.strokeStyle = s.accent; ctx.lineWidth = 8; ctx.shadowColor = s.accent; ctx.shadowBlur = 18;
+    ctx.strokeRect(10, 10, W - 20, H - 20);
+    ctx.strokeStyle = s.sub; ctx.lineWidth = 2; ctx.strokeRect(20, 20, W - 40, H - 40);
+    // main kanji
+    ctx.fillStyle = s.fg; ctx.shadowColor = s.fg; ctx.shadowBlur = 22;
+    ctx.font = '900 72px "Noto Sans JP", "Hiragino Kaku Gothic ProN", sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(s.jp, W / 2, H * 0.42);
+    // subtitle
+    ctx.fillStyle = s.sub; ctx.shadowColor = s.sub; ctx.shadowBlur = 14;
+    ctx.font = '700 30px "Rajdhani", Arial, sans-serif';
+    ctx.fillText(s.en, W / 2, H * 0.77);
+    return tex(c, false, true);
+  });
+  const vert = V_SIGNS.map((s) => {
+    const W = 128, H = 512;
+    const c = canvas(W, H), ctx = c.getContext('2d');
+    ctx.fillStyle = s.bg; ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = s.border; ctx.lineWidth = 6; ctx.shadowColor = s.border; ctx.shadowBlur = 14;
+    ctx.strokeRect(6, 6, W - 12, H - 12);
+    ctx.fillStyle = s.fg; ctx.shadowColor = s.fg; ctx.shadowBlur = 18;
+    ctx.font = '900 54px "Noto Sans JP", sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const n = s.chars.length;
+    const span = H * 0.74;
+    s.chars.forEach((ch, i) => {
+      ctx.fillText(ch, W / 2, 46 + (i + 0.5) * (span / n));
+    });
+    ctx.fillStyle = '#ffffff'; ctx.shadowColor = s.border; ctx.shadowBlur = 10;
+    ctx.font = '700 20px "Rajdhani", Arial, sans-serif';
+    ctx.fillText(s.sub, W / 2, H - 26);
+    return tex(c, false, true);
+  });
+  _tokyoSignCache = { horiz, vert };
+  return _tokyoSignCache;
+}

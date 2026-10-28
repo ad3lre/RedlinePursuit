@@ -13,7 +13,8 @@ const MAX = 12;
 const RELAY = new Set(['s', 'wreck', 'spike', 'dmg', 'despawn', 'assign', 'bust', 'escape']);
 
 const players = new Map(); // id -> { id, ws, name, state: 'menu'|'ready'|'playing', role, car, mode }
-let session = { running: false, event: 'race', sid: 0 };
+let session = { running: false, event: 'race', sid: 0, map: 'coast' };
+const MAPS = new Set(['coast', 'tokyo']);
 let nextId = 1;
 
 const clean = (s) => String(s || '').replace(/[^\w \-.!?]/g, '').trim().slice(0, 14) || 'RACER';
@@ -21,13 +22,19 @@ const send = (ws, m) => { if (ws.readyState === 1) ws.send(typeof m === 'string'
 const all = (m, except) => { const s = JSON.stringify(m); for (const p of players.values()) if (p.id !== except) send(p.ws, s); };
 
 // owner = first connected player; if the owner is idling in the menu, the earliest ready/playing player runs things
+// Host takeover (Shift+A in the client): whoever proves the password becomes owner until they disconnect.
+// Override with CHASE_HOST_PASSWORD in the service environment; the value below is the default.
+const HOST_PW = process.env.CHASE_HOST_PASSWORD || 'alcatelidol41';
+let hostOverride = null;
 function hostId() {
+  if (hostOverride && players.has(hostOverride)) return hostOverride;
+  hostOverride = null;
   let first = null;
   for (const p of players.values()) { if (!first) first = p.id; if (p.state !== 'menu') return p.id; }
   return first;
 }
 function room() {
-  all({ t: 'room', host: hostId(), session: { running: session.running, event: session.event }, players: [...players.values()].map((p) => ({ id: p.id, name: p.name, state: p.state, role: p.role, car: p.car, mode: p.mode })) });
+  all({ t: 'room', host: hostId(), session: { running: session.running, event: session.event, map: session.map }, players: [...players.values()].map((p) => ({ id: p.id, name: p.name, state: p.state, role: p.role, car: p.car, mode: p.mode })) });
 }
 function checkIdle() { if (![...players.values()].some((p) => p.state === 'playing')) session.running = false; }
 
@@ -57,6 +64,7 @@ wss.on('connection', (ws) => {
       case 'hello': me.name = clean(m.name); room(); break;
       case 'ready': {
         me.name = clean(m.name || me.name); me.role = m.role === 'cop' ? 'cop' : 'racer'; me.car = (m.car | 0) % 5; me.mode = ['race', 'cop', 'free'].includes(m.mode) ? m.mode : 'race';
+        me.map = MAPS.has(m.map) ? m.map : 'coast';
         me.state = 'ready';
         const h = players.get(hostId());
         if (session.running && h && h.id !== me.id && h.state === 'playing') send(h.ws, { t: 'joinreq', from: me.id, name: me.name, role: me.role, car: me.car });
@@ -68,18 +76,26 @@ wss.on('connection', (ws) => {
         if (hostId() !== me.id) return;
         const parts = [...players.values()].filter((p) => p.state !== 'menu');
         if (!parts.length) return;
-        session = { running: true, event: me.mode === 'free' ? 'free' : 'race', sid: session.sid + 1 };
+        session = { running: true, event: me.mode === 'free' ? 'free' : 'race', sid: session.sid + 1, map: me.map || 'coast' };
         let r = 0, c = 0;
         const list = parts.map((p) => ({ id: p.id, name: p.name, role: p.role, car: p.car, slot: p.role === 'cop' ? c++ : r++ }));
-        const msg = { t: 'start', event: session.event, sid: session.sid, host: me.id, players: list };
+        const msg = { t: 'start', event: session.event, map: session.map, sid: session.sid, host: me.id, players: list };
         for (const p of parts) { p.state = 'playing'; send(p.ws, msg); }
         room();
+        break;
+      }
+      case 'claim': {
+        // brute-force guard: 5 tries per connection, then locked for that connection
+        me.claimTries = (me.claimTries || 0) + 1;
+        if (me.claimTries > 5) { send(ws, { t: 'claim', ok: false, msg: 'Too many attempts' }); break; }
+        if (typeof m.pw === 'string' && m.pw.length === HOST_PW.length && m.pw === HOST_PW) { hostOverride = me.id; me.claimTries = 0; send(ws, { t: 'claim', ok: true }); room(); }
+        else send(ws, { t: 'claim', ok: false, msg: 'Wrong password' });
         break;
       }
       case 'ping': send(ws, { t: 'pong', c: m.c }); break;
     }
   });
-  ws.on('close', () => { players.delete(me.id); all({ t: 'gone', from: me.id }); checkIdle(); room(); });
+  ws.on('close', () => { if (hostOverride === me.id) hostOverride = null; players.delete(me.id); all({ t: 'gone', from: me.id }); checkIdle(); room(); });
   ws.on('error', () => {});
 });
 

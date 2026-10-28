@@ -84,6 +84,7 @@ try {
   check('bust broadcast counted on A with real racer total', (await A.evaluate(() => window.__rp.game.bustedRacers)) === bustedBefore + 1 && await A.evaluate(() => /\/\d+/.test(document.getElementById('busted-num').textContent)));
   // ---- spectator mode: A dies while real player B is still racing -> A spectates B; event ends when B is out too ----
   const specSnap = () => A.evaluate(() => { const g = window.__rp.game; const t = g.specTarget && g.specTarget(); return { state: g.state, spec: !!g.spectating, target: t ? t.name : null, banner: !document.getElementById('spec-banner').classList.contains('hidden'), bannerName: document.getElementById('spec-name').textContent, alive: g.aliveHumans().length, res: g.result ? { allOut: g.result.allOut, reason: g.result.reason } : null }; });
+  await A.waitForFunction(() => window.__rp.game.state === 'playing', { timeout: 240000, polling: 1000 }).catch(() => {}); // countdown is slow on software GL
   await A.evaluate(() => { const g = window.__rp.game; g.player.health = 0.01; g.damage(g.player, 0.5, null); }); await sleep(1200);
   let sp = await specSnap();
   check('A dies while B alive -> spectator mode (not game over)', sp.spec && sp.state === 'playing' && !sp.res, JSON.stringify(sp));

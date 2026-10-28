@@ -1,15 +1,18 @@
 // ===== Road network: highway loop, connectors, city grid, nav graph, A* =====
-import { CITY_HALF, STREET_SPACING, rawHeight } from './terrain.js';
+import { CITY_HALF, STREET_SPACING, rawHeight, currentMap } from './terrain.js';
 import { clamp, lerp } from './util.js';
 
 export const LOOP_HALF_W = 13;
 export const CONN_HALF_W = 10;
 
-export function loopRadius(t) {
+export function loopRadius(t, mapId = currentMap) {
+  if (mapId === 'tokyo') {
+    return 1340 + 115 * Math.cos(2 * t - 0.35) + 55 * Math.sin(5 * t + 0.85) + 24 * Math.sin(9 * t - 1.1);
+  }
   return 1320 + 110 * Math.sin(3 * t + 0.5) + 50 * Math.sin(7 * t + 1.3) + 22 * Math.sin(11 * t + 2.1);
 }
-function loopPoint(t) {
-  const r = loopRadius(t);
+function loopPoint(t, mapId = currentMap) {
+  const r = loopRadius(t, mapId);
   return { x: Math.cos(t) * r, z: Math.sin(t) * r };
 }
 
@@ -125,35 +128,49 @@ function driveableProfile(pts, maxGrade, pin = 1, closed = false) {
   }
 }
 
-export function buildRoads() {
+export function buildRoads(mapId = currentMap) {
+  const isTokyo = mapId === 'tokyo';
   const roads = [];
   // ---- Highway loop ----
   const dense = [];
   const N = 4000;
-  for (let i = 0; i <= N; i++) dense.push(loopPoint((i / N) * Math.PI * 2));
+  for (let i = 0; i <= N; i++) dense.push(loopPoint((i / N) * Math.PI * 2, mapId));
   let loopPts = resample(dense, 10);
   loopPts.pop(); // closed
-  for (const p of loopPts) p.h = Math.max(rawHeight(p.x, p.z), 3);
+  for (const p of loopPts) {
+    const minH = isTokyo && p.x > 980 ? lerp(3.5, 8, sstep(980, 1220, p.x)) : 3;
+    p.h = Math.max(rawHeight(p.x, p.z, mapId), minH);
+  }
   smoothHeights(loopPts, true, 10, 4);
-  for (const p of loopPts) p.h = Math.max(p.h, 3.5);
-  const loop = { name: 'COAST HIGHWAY', pts: loopPts, halfW: LOOP_HALF_W, closed: true, kind: 'highway' };
+  for (const p of loopPts) {
+    const minH = isTokyo && p.x > 980 ? lerp(3.5, 8, sstep(980, 1220, p.x)) : 3.5;
+    p.h = Math.max(p.h, minH);
+  }
+  const loop = { name: isTokyo ? 'WANGAN EXPRESSWAY' : 'COAST HIGHWAY', pts: loopPts, halfW: LOOP_HALF_W, closed: true, kind: 'highway' };
   roads.push(loop);
 
   const loopIndexAtAngle = (ang) => {
-    const target = loopPoint(ang);
+    const target = loopPoint(ang, mapId);
     let best = 0, bd = 1e18;
     loopPts.forEach((p, i) => { const d = (p.x - target.x) ** 2 + (p.z - target.z) ** 2; if (d < bd) { bd = d; best = i; } });
     return best;
   };
 
   // ---- Connectors ----
-  const connDefs = [
-    { name: 'NORTH AVE', s: { x: 0, z: -CITY_HALF }, dir: { x: 0, z: -1 }, ang: -Math.PI / 2, wig: 60, freq: 1 },
-    { name: 'SOUTH AVE', s: { x: 0, z: CITY_HALF }, dir: { x: 0, z: 1 }, ang: Math.PI / 2, wig: -70, freq: 1 },
-    { name: 'OCEAN BLVD', s: { x: CITY_HALF, z: 0 }, dir: { x: 1, z: 0 }, ang: 0, wig: 50, freq: 1 },
-    { name: 'WEST PARKWAY', s: { x: -CITY_HALF, z: 0 }, dir: { x: -1, z: 0 }, ang: Math.PI, wig: -60, freq: 1 },
-    { name: 'CANYON ROAD', s: { x: -CITY_HALF, z: -CITY_HALF }, dir: { x: -0.7071, z: -0.7071 }, ang: -Math.PI * 0.75, wig: 90, freq: 3 },
-    { name: 'HARBOR DRIVE', s: { x: CITY_HALF, z: CITY_HALF }, dir: { x: 0.7071, z: 0.7071 }, ang: Math.PI * 0.25, wig: 70, freq: 2 },
+  const connDefs = isTokyo ? [
+    { tag: 'north', name: 'SHINJUKU DORI', jp: '新宿通り', s: { x: 0, z: -CITY_HALF }, dir: { x: 0, z: -1 }, ang: -Math.PI / 2, wig: 65, freq: 1 },
+    { tag: 'south', name: 'SHIBUYA DORI', jp: '渋谷通り', s: { x: 0, z: CITY_HALF }, dir: { x: 0, z: 1 }, ang: Math.PI / 2, wig: -75, freq: 1 },
+    { tag: 'east', name: 'RAINBOW BRIDGE', jp: 'レインボーブリッジ', s: { x: CITY_HALF, z: 0 }, dir: { x: 1, z: 0 }, ang: 0, wig: 35, freq: 1 },
+    { tag: 'west', name: 'HAKONE TOUGE', jp: '箱根峠', s: { x: -CITY_HALF, z: 0 }, dir: { x: -1, z: 0 }, ang: Math.PI, wig: -80, freq: 2 },
+    { tag: 'nw', name: 'HARUNA PASS', jp: '榛名山', s: { x: -CITY_HALF, z: -CITY_HALF }, dir: { x: -0.7071, z: -0.7071 }, ang: -Math.PI * 0.75, wig: 105, freq: 3 },
+    { tag: 'se', name: 'ODAIBA BAYWAY', jp: 'お台場湾岸', s: { x: CITY_HALF, z: CITY_HALF }, dir: { x: 0.7071, z: 0.7071 }, ang: Math.PI * 0.25, wig: 60, freq: 2 },
+  ] : [
+    { tag: 'north', name: 'NORTH AVE', s: { x: 0, z: -CITY_HALF }, dir: { x: 0, z: -1 }, ang: -Math.PI / 2, wig: 60, freq: 1 },
+    { tag: 'south', name: 'SOUTH AVE', s: { x: 0, z: CITY_HALF }, dir: { x: 0, z: 1 }, ang: Math.PI / 2, wig: -70, freq: 1 },
+    { tag: 'east', name: 'OCEAN BLVD', s: { x: CITY_HALF, z: 0 }, dir: { x: 1, z: 0 }, ang: 0, wig: 50, freq: 1 },
+    { tag: 'west', name: 'WEST PARKWAY', s: { x: -CITY_HALF, z: 0 }, dir: { x: -1, z: 0 }, ang: Math.PI, wig: -60, freq: 1 },
+    { tag: 'nw', name: 'CANYON ROAD', s: { x: -CITY_HALF, z: -CITY_HALF }, dir: { x: -0.7071, z: -0.7071 }, ang: -Math.PI * 0.75, wig: 90, freq: 3 },
+    { tag: 'se', name: 'HARBOR DRIVE', s: { x: CITY_HALF, z: CITY_HALF }, dir: { x: 0.7071, z: 0.7071 }, ang: Math.PI * 0.25, wig: 70, freq: 2 },
   ];
   const connectors = [];
   const ramps = [];
@@ -186,15 +203,19 @@ export function buildRoads() {
     pts[0] = { x: s.x, z: s.z };
     pts[pts.length - 1] = { x: F.x, z: F.z };
     relaxCurve(pts, CONN_HALF_W * 3.2);
-    for (const p of pts) p.h = rawHeight(p.x, p.z);
+    for (const p of pts) p.h = rawHeight(p.x, p.z, mapId);
     smoothHeights(pts, false, 8, 4);
     const targetH = e.h;
     const h0 = pts[0].h, h1 = pts[pts.length - 1].h;
     const t0 = 0 - h0, t1 = targetH - h1;
-    pts.forEach((p, i) => { const t = i / (pts.length - 1); p.h += lerp(t0, t1, t); if (i >= 12) p.h = Math.max(p.h, 2.5); });
+    pts.forEach((p, i) => {
+      const t = i / (pts.length - 1);
+      p.h += lerp(t0, t1, t);
+      if (i >= 12) p.h = Math.max(p.h, isTokyo && p.x > 950 ? lerp(4, 8, sstep(950, 1180, p.x)) : 2.5);
+    });
     for (let i = 0; i < Math.min(8, pts.length); i++) pts[i].h *= i / 8;
     driveableProfile(pts, 0.085, 1);
-    const road = { name: c.name, pts, halfW: CONN_HALF_W, closed: false, kind: 'conn', loopIndex: li };
+    const road = { tag: c.tag, name: c.name, jp: c.jp, pts, halfW: CONN_HALF_W, closed: false, kind: 'conn', loopIndex: li };
     roads.push(road);
     connectors.push(road);
     // ramps (bezier merge tangentially into loop)
@@ -226,7 +247,7 @@ export function buildRoads() {
         rp[i].h = lerp(rp[i].h, q.h, w);
       }
       rp[rp.length - 1].h = L.h;
-      const ramp = { name: c.name + ' RAMP', pts: rp, halfW: 9, closed: false, kind: 'ramp', loopIndex: lp, parent: road };
+      const ramp = { tag: c.tag, name: c.name + ' RAMP', pts: rp, halfW: 9, closed: false, kind: 'ramp', loopIndex: lp, parent: road };
       roads.push(ramp); ramps.push(ramp); road.ramps.push(ramp);
     }
   }
@@ -355,7 +376,7 @@ export function buildNav(net) {
       r.navIds = rid;
     }
   }
-  nav.ramps = net.roads.filter((r) => r.kind === 'ramp').map((r) => ({ name: r.name, loopIndex: r.loopIndex, navIds: r.navIds }));
+  nav.ramps = net.roads.filter((r) => r.kind === 'ramp').map((r) => ({ tag: r.tag, name: r.name, loopIndex: r.loopIndex, navIds: r.navIds }));
   nav.buildGrid();
   nav.cityId = (x, z) => nav.keyMap.get(ck(x, z));
   nav.loopId = (ang) => loopIds[net.loopIndexAtAngle(ang)];

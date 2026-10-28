@@ -13,10 +13,27 @@ export const HF_CELL = (WORLD_HALF * 2) / HF_N;
 const n1 = makeNoise2D(1337);
 const n2 = makeNoise2D(4242);
 const n3 = makeNoise2D(777);
+const n4 = makeNoise2D(2088);
 
-export function rawHeight(x, z) {
+export let currentMap = 'coast';
+export function setTerrainMap(m) { currentMap = m || 'coast'; }
+
+export function rawHeight(x, z, mapId = currentMap) {
   const dCity = Math.max(Math.abs(x), Math.abs(z));
   const mask = smoothstep(680, 1050, dCity);
+  if (mapId === 'tokyo') {
+    // Tokyo Night: flat Shinjuku/Shibuya basin, steep Hakone/Haruna volcanic ridges to the west/north, wide Tokyo Bay to the east
+    let h = (fbm(n4, x / 680, z / 680, 4) * 68 + 24 + fbm(n2, x / 190, z / 190, 3) * 11) * mask;
+    const e = Math.max(-x * 1.08, Math.abs(z) * 0.96);
+    const eastFade = 1 - smoothstep(980, 1380, x);
+    const me = smoothstep(1480, 2020, e) * eastFade;
+    h += me * (220 + 155 * fbm(n3, x / 240, z / 240, 4));
+    // Tokyo Bay cuts in closer on the east so Wangan Expressway & Rainbow Bridge span open water
+    const bay = x + 55 * Math.sin(z / 210) + 30 * Math.cos(z / 75);
+    const o = smoothstep(1060, 1290, bay);
+    h = lerp(h, -28, o);
+    return h;
+  }
   let h = (fbm(n1, x / 750, z / 750, 4) * 60 + 22 + fbm(n2, x / 210, z / 210, 3) * 9) * mask;
   // mountains on west/north/south borders
   const e = Math.max(-x, Math.abs(z));
@@ -53,6 +70,7 @@ export class HeightField {
   }
   build(roads) {
     const n = this.n;
+    this.rd.fill(999);
     // spatial hash of road segments
     const CS = 64;
     const grid = new Map();

@@ -183,6 +183,9 @@ body.mouse-drag { cursor: grabbing; }
 button:focus { outline: none; }
 #sound-hint { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 40; font-family: 'Noto Sans JP', sans-serif; font-size: 13px; background: rgba(0,0,0,0.7); border: 1px solid var(--line); padding: 8px 16px; pointer-events: none; }
 #pad-badge { position: absolute; right: 20px; bottom: 20px; z-index: 40; font-family: 'Noto Sans JP', sans-serif; font-size: 13px; background: rgba(0,0,0,0.7); border-left: 3px solid var(--acc); padding: 8px 14px; pointer-events: none; opacity: 0; }
+.mapsel .mapbtn { background: rgba(255,255,255,0.07); border: 1px solid var(--line); color: #fff; padding: 8px 14px; font-weight: 700; }
+.mapsel .mapbtn.on { background: linear-gradient(90deg, #ff2aa4, #00c8ff); color: #000; }
+.nav-mode .mapbtn.pad-focus { outline: 3px solid #fff; outline-offset: 2px; }
 .padhint { font-family: 'Noto Sans JP', sans-serif; font-size: 12px; color: rgba(255,255,255,0.55); margin-top: 10px; }
 @media (max-width: 900px) { #speedo-wrap { transform: scale(0.7); transform-origin: bottom right; } #minimap-wrap { transform: scale(0.7); transform-origin: top right; } }
 #wait-banner { position: fixed; left: 50%; bottom: 120px; transform: translateX(-50%); z-index: 60; padding: 10px 22px; background: rgba(8,10,14,0.82); border: 1px solid var(--line); color: #fff; font: 700 18px Rajdhani, sans-serif; letter-spacing: 0.12em; pointer-events: none; }
@@ -254,6 +257,12 @@ button:focus { outline: none; }
       <button class="mode" data-mode="race"><b>HOT PURSUIT RACE</b><span>Race 3 rivals as a street racer. Shake off the police and take 1st place.</span></button>
       <button class="mode cop" data-mode="cop"><b>INTERCEPTOR</b><span>Play as the police. Bust 4 illegal racers with spike strips and EMP.</span></button>
       <button class="mode free" data-mode="free"><b>FREE RUN</b><span>Roam the huge map freely. If a patrol spots you, escape.</span></button>
+      <div class="h2" style="margin-top:22px">MAP</div>
+      <div class="segs mapsel" style="justify-content:flex-start;margin-bottom:6px">
+        <button class="mapbtn" data-map="tokyo">TOKYO NIGHT 東京</button>
+        <button class="mapbtn" data-map="coast">REDVIEW COAST</button>
+      </div>
+      <div id="map-note" class="padhint" style="margin-top:2px"></div>
       <div class="namebox"><label for="player-name">YOUR NAME</label><input id="player-name" type="text" maxlength="14" autocomplete="off" spellcheck="false" placeholder="Pick a name"><small>Shown to other players online. Letters, numbers, space and - . ! ?</small></div>
       <div class="links">
         <button class="btn" id="btn-settings">SETTINGS</button>
