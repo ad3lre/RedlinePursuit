@@ -107,6 +107,8 @@ export function makePaint(color, livery = 'plain', color2 = 0xffffff) {
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
       varying vec3 vLoc; uniform vec3 uC2; uniform float uLiv; uniform float uDmg;
       float dh(vec3 p){ vec3 p3 = fract(p * 0.1031); p3 += dot(p3, p3.zyx + 31.32); return fract((p3.x + p3.y) * p3.z); }`)
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+      { float fr = pow(1.0 - clamp(dot(normalize(normal), normalize(vViewPosition)), 0.0, 1.0), 3.0); totalEmissiveRadiance += diffuseColor.rgb * fr * 0.10; } // grazing-angle sheen: paint reads deeper and glossier at the silhouette`)
       .replace('#include <color_fragment>', `#include <color_fragment>
       float m2 = 0.0;
       if (uLiv > 0.5 && uLiv < 1.5) { float ax = abs(vLoc.x); m2 = step(0.1, ax) * step(ax, 0.26) * step(0.7, vLoc.y); }

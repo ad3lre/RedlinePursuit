@@ -127,6 +127,8 @@ export class VFX {
     this.flash = new THREE.PointLight(0xffaa66, 0, 40, 2);
     scene.add(this.flash);
     this.flashT = 0;
+    // nitro light: blue underglow that lights the road and the car's rear while boosting (kept in the scene at 0 so shaders never recompile)
+    this.nitroLight = new THREE.PointLight(0x4f8cff, 0, 18, 2); scene.add(this.nitroLight); this._nl = 0; this._nlPos = new THREE.Vector3();
     // nitro flame texture
     this.flameTex = glowTexture('rgba(160,200,255,1)', 'rgba(40,80,255,0)', 64);
     // EMP shell
@@ -180,9 +182,34 @@ export class VFX {
     this.sparks(x, y, z, vx * 0.03, vz * 0.03, 40, 1.4);
     this.debrisBurst(x, y, z, vx, vz, 12);
   }
-  nitroFlame(x, y, z, fx, fz, vx, vz) {
-    this.glow.emit({ x, y, z, vx: -fx * 14 + vx, vy: 0.3, vz: -fz * 14 + vz, life: 0.12 + Math.random() * 0.06, s0: 0.9, s1: 0.2, a: 0.95, r: 0.8, g: 1.4, b: 4, drag: 0 });
-    this.glow.emit({ x, y, z, vx: -fx * 6 + vx, vy: 0, vz: -fz * 6 + vz, life: 0.07, s0: 0.5, s1: 0.2, a: 1, r: 4, g: 3, b: 3, drag: 0 });
+  // Layered nitro jet: white-hot core -> blue body -> violet tail, shock diamonds, sparks. Called once per exhaust per frame.
+  nitroFlame(x, y, z, fx, fz, vx, vz, power = 1) {
+    const len = (0.85 + Math.random() * 0.35) * power;
+    this.glow.emit({ x, y, z, vx: -fx * 9 + vx, vy: 0.1, vz: -fz * 9 + vz, life: 0.07 + Math.random() * 0.04, s0: 0.7, s1: 0.3, a: 1, r: 4.5, g: 4.0, b: 3.6, drag: 0 });
+    for (let k = 0; k < 6; k++) {
+      const u = k / 5, off = 0.15 + u * 2.6 * len;
+      const r = 3.6 - 3.0 * u, g = 3.4 - 2.5 * u, b = 5.2 - 1.2 * u; // white-blue -> blue -> violet
+      this.glow.emit({ x: x - fx * off, y: y + (Math.random() - 0.5) * 0.06, z: z - fz * off, vx: -fx * (11 + u * 9) + vx, vy: (Math.random() - 0.5) * 0.4, vz: -fz * (11 + u * 9) + vz,
+        life: 0.09 + u * 0.09, s0: 0.85 - 0.35 * u, s1: 0.35 + 0.5 * u, a: 0.95 - 0.5 * u, r, g, b, drag: 0.3 });
+    }
+    // shock diamonds: tiny bright beads that sit still relative to the car
+    if (Math.random() < 0.7) for (let k = 1; k <= 3; k++) {
+      const off = 0.55 + k * 0.72 * len;
+      this.glow.emit({ x: x - fx * off, y, z: z - fz * off, vx, vy: 0, vz, life: 0.05, s0: 0.4 - k * 0.06, s1: 0.2, a: 1, r: 3.2, g: 4.4, b: 7, drag: 0 });
+    }
+    if (Math.random() < 0.35) this.glow.emit({ x: x - fx * 0.4, y, z: z - fz * 0.4, vx: -fx * (6 + Math.random() * 12) + vx + (Math.random() - 0.5) * 5, vy: 1 + Math.random() * 2.5, vz: -fz * (6 + Math.random() * 12) + vz + (Math.random() - 0.5) * 5,
+      life: 0.25 + Math.random() * 0.25, s0: 0.2, s1: 0.04, a: 1, r: 2.2, g: 2.6, b: 5, drag: 1, grav: 10, spin: 0 });
+  }
+  // one-off: ignition shock ring + flash (nitro engaged) / cutoff pop (nitro ended)
+  nitroIgnite(x, y, z, fx, fz, vx, vz) {
+    for (let i = 0; i < 18; i++) {
+      const a = (i / 18) * 6.28, c = Math.cos(a), sn = Math.sin(a), rx = -fz, rz = fx;
+      this.glow.emit({ x, y: y + c * 0.1, z, vx: -fx * 5 + rx * sn * 7 + vx, vy: c * 7, vz: -fz * 5 + rz * sn * 7 + vz, life: 0.22, s0: 0.5, s1: 0.1, a: 0.9, r: 1.2, g: 2.4, b: 6, drag: 3 });
+    }
+    this.glow.emit({ x: x - fx * 0.5, y, z: z - fz * 0.5, vx, vy: 0, vz, life: 0.12, s0: 2.6, s1: 4.2, a: 0.6, r: 1.2, g: 2.2, b: 6, drag: 0 });
+  }
+  nitroCut(x, y, z, fx, fz, vx, vz) {
+    for (let k = 0; k < 5; k++) this.glow.emit({ x, y, z, vx: -fx * (6 + k * 2) + vx + (Math.random() - 0.5) * 2, vy: 0.4 + Math.random(), vz: -fz * (6 + k * 2) + vz + (Math.random() - 0.5) * 2, life: 0.12 + Math.random() * 0.1, s0: 0.5, s1: 0.1, a: 1, r: 4, g: 1.8, b: 0.6, drag: 2 });
   }
   empBurst(x, y, z) {
     for (let i = 0; i < 40; i++) {
@@ -202,6 +229,7 @@ export class VFX {
       d.m.rotation.x += d.w.x * dt; d.m.rotation.y += d.w.y * dt; d.m.rotation.z += d.w.z * dt;
       if (d.life <= 0) d.m.visible = false;
     }
+    this.nitroLight.intensity += ((this._nl - this.nitroLight.intensity)) * Math.min(1, dt * 18); this._nl = 0;
     if (this.flashT > 0) { this.flashT -= dt; if (this.flashT <= 0) this.flash.intensity = 0; else this.flash.intensity *= 0.8; }
   }
   // per-car effects called each frame
@@ -243,11 +271,15 @@ export class VFX {
       this.tireSmoke(car.pos.x - fx * exL + rx * s, car.pos.y + 0.3, car.pos.z - fz * exL + rz * s, car.vel.x - fx * 2, car.vel.y - fz * 2, 0.12, true);
     }
     if (car.nitroActive) {
-      for (const s of [-0.45, 0.45]) {
-        const x = car.pos.x - fx * (car.dims.L / 2 + 0.15) + rx * s, z = car.pos.z - fz * (car.dims.L / 2 + 0.15) + rz * s;
-        this.nitroFlame(x, car.pos.y + 0.18, z, fx, fz, car.vel.x, car.vel.y);
-      }
+      const ex = car.dims.L / 2 + 0.12, sx = car.dims.W * 0.2;
+      for (const s of [-sx, sx]) this.nitroFlame(car.pos.x - fx * ex + rx * s, car.pos.y + 0.2, car.pos.z - fz * ex + rz * s, fx, fz, car.vel.x, car.vel.y, 1);
+      if (!car._nitroPrev) for (const s of [-sx, sx]) this.nitroIgnite(car.pos.x - fx * ex + rx * s, car.pos.y + 0.2, car.pos.z - fz * ex + rz * s, fx, fz, car.vel.x, car.vel.y);
+      if (car.role === 'player') { this._nl = 22 * (0.85 + Math.random() * 0.3); this.nitroLight.position.set(car.pos.x - fx * (ex + 1.4), car.pos.y + 0.5, car.pos.z - fz * (ex + 1.4)); }
+    } else if (car._nitroPrev) {
+      const ex = car.dims.L / 2 + 0.12, sx = car.dims.W * 0.2;
+      for (const s of [-sx, sx]) this.nitroCut(car.pos.x - fx * ex + rx * s, car.pos.y + 0.2, car.pos.z - fz * ex + rz * s, fx, fz, car.vel.x, car.vel.y);
     }
+    car._nitroPrev = car.nitroActive;
     if (car.health < 0.45 && Math.random() < dt * (car.wrecked ? 18 : 6)) {
       this.damageSmoke(car.pos.x + fx * car.dims.L * 0.35, car.pos.y + 0.9, car.pos.z + fz * car.dims.L * 0.35, car.health < 0.2 || car.wrecked);
     }

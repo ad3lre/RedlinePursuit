@@ -44,6 +44,7 @@ const hud = new HUD();
 const rig = new CameraRig(camera, world, settings);
 let post = null;
 let game = null;
+const _sunV = new THREE.Vector3();
 let app = 'loading'; // loading | title | menu | garage | game | paused | result
 let selMode = 'race', selCar = 0;
 
@@ -171,6 +172,12 @@ function loop(now) {
   u.uBlur.value = settings.speedFx ? 1 : 0;
   nitroFx = lerp(nitroFx, inGame && pl.nitroActive ? 1 : 0, 0.12);
   u.uNitro.value = nitroFx;
+  post.bloom.strength = 0.5 + 0.3 * nitroFx;
+  { // sun position on screen for the shaft pass (only while the sun is in front of the camera)
+    const sd = game.world.sunDir; _sunV.copy(camera.position).addScaledVector(sd, 2000).project(camera);
+    const vis = _sunV.z < 1 && Math.abs(_sunV.x) < 1.6 && Math.abs(_sunV.y) < 1.6 ? 1 : 0;
+    u.uSun.value.set(_sunV.x * 0.5 + 0.5, _sunV.y * 0.5 + 0.5, lerp(u.uSun.value.z, vis * (inGame || app === 'menu' ? 1 : 0.6), 0.1));
+  }
   const low = inGame && pl.health < 0.25 ? 0.25 + Math.sin(time * 6) * 0.15 : 0;
   u.uDamage.value = inGame ? Math.max(hud.dmgFlash * 0.8, low) : 0;
   const sg = inGame && game.sirenGlow;

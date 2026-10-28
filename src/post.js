@@ -65,11 +65,11 @@ class MotionBlurPass extends Pass {
 const FinalShader = {
   uniforms: {
     tDiffuse: { value: null }, uSpeed: { value: 0 }, uBlur: { value: 1 }, uTime: { value: 0 },
-    uDamage: { value: 0 }, uNitro: { value: 0 }, uMB: { value: 0 }, uVig: { value: 1 }, uRes: { value: new THREE.Vector2(1, 1) }, uSiren: { value: new THREE.Vector3() },
+    uDamage: { value: 0 }, uNitro: { value: 0 }, uMB: { value: 0 }, uVig: { value: 1 }, uRes: { value: new THREE.Vector2(1, 1) }, uSiren: { value: new THREE.Vector3() }, uSun: { value: new THREE.Vector3(0.5, 0.5, 0) },
   },
   vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
   fragmentShader: `
-    uniform sampler2D tDiffuse; uniform float uSpeed, uBlur, uTime, uDamage, uNitro, uVig, uMB; uniform vec2 uRes; uniform vec3 uSiren;
+    uniform sampler2D tDiffuse; uniform float uSpeed, uBlur, uTime, uDamage, uNitro, uVig, uMB; uniform vec2 uRes; uniform vec3 uSiren, uSun;
     varying vec2 vUv;
     float h(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
     void main(){
@@ -77,7 +77,7 @@ const FinalShader = {
       vec2 d = vUv - c;
       float r = length(d);
       float mask = smoothstep(0.18, 0.75, r);
-      float amt = uSpeed * uBlur;
+      float amt = uSpeed * uBlur + uNitro * 0.45 * uBlur; // nitro adds its own radial rush even at moderate speed
       vec3 col = vec3(0.0);
       if (amt > 0.01) {
         float st = (0.028 - 0.016 * uMB) * amt * mask;
@@ -95,7 +95,14 @@ const FinalShader = {
         float lane = floor(ang * 70.0);
         float s = step(0.965, h(vec2(lane + 300.0, mod(floor(uTime * 14.0 + lane * 0.37), 997.0))));
         float along = fract(r * 3.0 - uTime * 4.0 + h(vec2(lane, 1.0)));
-        col += vec3(0.7, 0.8, 1.0) * s * smoothstep(0.35, 0.9, r) * smoothstep(0.0, 0.3, along) * (1.0 - along) * amt * 0.5;
+        col += mix(vec3(0.7, 0.8, 1.0), vec3(0.35, 0.65, 1.0), uNitro) * s * smoothstep(0.35, 0.9, r) * smoothstep(0.0, 0.3, along) * (1.0 - along) * amt * 0.5;
+      }
+      // sun shafts: march from the pixel toward the sun, keep only HDR-bright samples (sun disc / sky glow); hills and buildings occlude naturally
+      if (uSun.z > 0.01) {
+        vec2 sd = (uSun.xy - vUv) * 0.55; float jt = h(gl_FragCoord.xy) * 0.5; vec3 acc = vec3(0.0);
+        for (int i = 0; i < 10; i++) { float t = (float(i) + jt) / 10.0; vec3 sm = texture2D(tDiffuse, vUv + sd * t).rgb; acc += max(sm - vec3(1.1), 0.0) * (1.0 - t); }
+        float fall = 1.0 - smoothstep(0.0, 1.2, length(vUv - uSun.xy));
+        col += min(acc * 0.1, vec3(1.5)) * vec3(1.0, 0.72, 0.45) * uSun.z * (0.35 + 0.65 * fall);
       }
       // grading: slight saturation + contrast in linear
       float l = dot(col, vec3(0.2126, 0.7152, 0.0722));
@@ -109,7 +116,7 @@ const FinalShader = {
       // damage & nitro & siren edge glow
       float edge = smoothstep(0.35, 0.85, r);
       col = mix(col, col * vec3(1.6, 0.3, 0.3) + vec3(0.25, 0.0, 0.0), edge * uDamage);
-      col += vec3(0.1, 0.3, 1.0) * edge * uNitro * 0.35;
+      col += vec3(0.1, 0.3, 1.0) * edge * uNitro * (0.5 + 0.1 * sin(uTime * 38.0)) + vec3(0.25, 0.5, 1.0) * smoothstep(0.55, 1.0, r) * uNitro * 0.35;
       col += vec3(uSiren.x, 0.0, uSiren.y) * edge * 0.25 * uSiren.z;
       // grain
       col += (h(vUv * uRes + fract(uTime * 7.0) * 311.0) - 0.5) * 0.015;

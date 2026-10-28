@@ -71,4 +71,16 @@ if (scen === 'cyber' || scen === 'car') {
   const s = await pg.evaluate(() => { const a = window.__ft.slice(20).sort((x, y) => x - y); const avg = a.reduce((x, y) => x + y, 0) / a.length; return { frames: a.length, fps: +(1000 / avg).toFixed(1), p95_ms: +a[Math.floor(a.length * 0.95)].toFixed(1), worst_ms: +a[a.length - 1].toFixed(1) }; });
   say({ ...s, ...(await stats()) });
 }
+if (scen === 'nitro') {
+  // nitro look: free run, hold W + nitro, shots from chase / low rear / front quarter. env NITROCAR picks the car (default 0).
+  say({ started: await startGame('free') });
+  await place('COAST HIGHWAY', 40, 120);
+  await pg.evaluate(() => { const p = window.__rp.game.player; p.nitro = 1; });
+  await pg.keyboard.down('KeyW'); await pg.keyboard.down('ShiftLeft'); await sleep(2200);
+  await pg.evaluate(() => { const p = window.__rp.game.player; p.nitro = 1; });
+  await pg.screenshot({ path: `${out}/nitro_chase.png` }); await sleep(600); await pg.screenshot({ path: `${out}/nitro_chase2.png` });
+  await pg.keyboard.press('KeyC'); await sleep(1400); await pg.evaluate(() => { window.__rp.game.player.nitro = 1; }); await pg.screenshot({ path: `${out}/nitro_cam2.png` });
+  await pg.keyboard.press('KeyC'); await sleep(1400); await pg.evaluate(() => { window.__rp.game.player.nitro = 1; }); await pg.screenshot({ path: `${out}/nitro_cam3.png` });
+  say(await pg.evaluate(() => { const p = window.__rp.game.player; return { nitroActive: p.nitroActive, kmh: Math.round(p.speed * 3.6), nitro: +p.nitro.toFixed(2) }; }));
+}
 say({ errors: errs.slice(0, 4) }); await br.close(); srv.close();
