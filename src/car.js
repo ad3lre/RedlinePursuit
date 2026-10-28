@@ -38,6 +38,8 @@ const tmpN = new THREE.Vector3();
 const colRes = {};
 const UP = new THREE.Vector3(0, 1, 0);
 
+// held-steer ramp: full effect after HOLD_RAMP_S of continuous steering in one direction; HOLD_GAIN = extra steering authority at full hold (+80%)
+const HOLD_RAMP_S = 1.2, HOLD_GAIN = 0.8;
 export class Car {
   constructor(game, spec, opts = {}) {
     this.game = game;
@@ -187,11 +189,24 @@ export class Car {
       // cornering budget (m/s^2): friction circle - driving or braking hard leaves less for turning; cg trims it
       const al = Math.min(aLong, muG * 0.97);
       const circle = Math.sqrt(Math.max(0.12, 1 - (al / muG) ** 2));
-      const capLat = muG * 1.15 * circle * (1 - 0.35 * (cg - 0.5)) * (this.drifting ? 1.75 : 1);
+      // held steering: the longer the same direction is held, the more aggressive the turn-in (linear ramp, player only).
+      // It raises steering lock AND the cornering budget together, so the car actually rotates harder instead of just hitting the grip cap.
+      let hold = 0;
+      if (this.role === 'player') {
+        const sIn = inp.steer;
+        if (Math.abs(sIn) > 0.2) {
+          if (Math.sign(sIn) !== this.holdDir) { this.holdDir = Math.sign(sIn); this.holdT = 0; } // new direction restarts the ramp
+          this.holdT = Math.min(HOLD_RAMP_S, (this.holdT || 0) + dt);
+        } else this.holdT = Math.max(0, (this.holdT || 0) - dt * 4); // released: bleeds off in ~0.3 s
+        hold = (this.holdT || 0) / HOLD_RAMP_S; // 0..1, linear in time held
+      }
+      const holdBoost = 1 + HOLD_GAIN * hold;
+      this.holdBoost = holdBoost;
+      const capLat = muG * 1.15 * circle * (1 - 0.35 * (cg - 0.5)) * (this.drifting ? 1.75 : 1) * (1 + 0.6 * HOLD_GAIN * hold);
       // steering: road-wheel angle is *proportional* to the wheel input, and full lock is scaled so it just reaches the grip limit at that speed.
       // (before: 10% steering already saturated a ~3 g cap, so the car snapped round)
       const wb2 = Math.max(2.2, this.dims.wb * 2);
-      const dMax = (this.drifting ? 0.5 : clamp(Math.atan(wb2 * capLat * spec.steer / Math.max(sp * sp, 25)), 0.02, 0.55));
+      const dMax = (this.drifting ? 0.5 : clamp(Math.atan(wb2 * capLat * spec.steer * holdBoost / Math.max(sp * sp, 25)), 0.02, 0.55 + 0.15 * hold));
       this.steerAngle = damp(this.steerAngle, inp.steer * dMax, 10, dt);
       this.steerWheel = damp(this.steerWheel || 0, inp.steer, 12, dt);
       let target = vF * Math.tan(this.steerAngle) / wb2; // bicycle-model yaw rate
@@ -199,7 +214,7 @@ export class Car {
       const capYaw = Math.min(2.4, capLat / Math.max(sp, 2.5));
       target = clamp(target, -capYaw, capYaw);
       if (this.drifting) target += -slip * 0.6 * Math.sign(vF); // natural counter-yaw
-      else target += -slip * 0.9 * clamp(sp / 35, 0, 1) * Math.sign(vF || 1); // straight-line stability: the nose is pulled back toward the direction of travel
+      else target += -slip * 0.9 * (1 - 0.5 * hold) * clamp(sp / 35, 0, 1) * Math.sign(vF || 1); // straight-line stability: the nose is pulled back toward the direction of travel
       // yaw response: builds a touch slower at speed and in heavier cars (rotational inertia), instant enough at low speed to stay easy
       const resp = lerp(9, 6.5, clamp(sp / 60, 0, 1)) / (0.85 + 0.15 * this.mass);
       this.angVel = damp(this.angVel, target, this.drifting ? 5 : resp, dt);

@@ -1,0 +1,15 @@
+import puppeteer from 'puppeteer-core';
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const br = await puppeteer.launch({ executablePath: '/usr/bin/google-chrome', headless: 'new', args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
+const A = await br.newPage();
+A.on('pageerror', (e) => console.log('PAGEERR', e.message));
+A.on('console', (m) => { if (m.type() === 'error' && !/404/.test(m.text())) console.log('CONSOLE', m.text().slice(0, 200)); });
+await A.goto('http://127.0.0.1:8911/?noperf&server=ws://127.0.0.1:3911', { timeout: 120000 });
+await A.waitForFunction(() => !document.getElementById('title').classList.contains('hidden'), { timeout: 240000, polling: 1000 });
+await sleep(2000);
+await A.click('#title'); await sleep(1200);
+await A.click('[data-mode="race"]'); await sleep(2500);
+console.log('screen', await A.evaluate(() => [...document.querySelectorAll('.screen')].filter((e) => !e.classList.contains('hidden')).map((e) => e.id).join()));
+await A.click('#btn-start'); await sleep(1500);
+console.log('banner', await A.evaluate(() => document.getElementById('wait-banner').textContent + '|' + document.getElementById('btn-start').textContent));
+await br.close();
