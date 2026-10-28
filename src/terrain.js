@@ -22,23 +22,20 @@ export function rawHeight(x, z, mapId = currentMap) {
   const dCity = Math.max(Math.abs(x), Math.abs(z));
   const mask = smoothstep(640, 980, dCity);
   if (mapId === 'tokyo') {
-    // Tokyo Night: flat megacity basin (-620..520), wide Tokyo Bay across the entire eastern side (x > 520) with Odaiba island,
+    // Tokyo Night: strictly flat megacity basin (dCity <= 640 -> h = 0), wide Tokyo Bay on the east (x > 680) with Odaiba island,
     // and steep Mt. Hakone / Haruna volcanic mountains on the west and northwest.
-    let h = (fbm(n4, x / 620, z / 620, 4) * 74 + 26 + fbm(n2, x / 175, z / 175, 3) * 13) * mask;
-    // Steep western & northern volcanic touge ridges
-    const westMount = smoothstep(-520, -1450, x) * (0.65 + 0.35 * smoothstep(-600, 900, Math.abs(z)));
+    let h = (fbm(n4, x / 620, z / 620, 4) * 74 + 26 + fbm(n2, x / 175, z / 175, 3) * 13);
+    const westMount = smoothstep(-660, -1450, x) * (0.65 + 0.35 * smoothstep(-600, 900, Math.abs(z)));
     h += westMount * (165 + 135 * fbm(n3, (x + 300) / 230, z / 230, 4));
     const borderMount = smoothstep(1450, 1980, Math.max(-x, Math.abs(z))) * (1 - smoothstep(450, 950, x));
     h += borderMount * (210 + 140 * fbm(n3, x / 250, z / 250, 4));
-    // Tokyo Bay: comes right up to the eastern city waterfront (x ~ 540) so Rainbow Bridge & Wangan span open bay water
-    const bayEdge = 560 + 65 * Math.sin(z / 240) - 45 * Math.cos(z / 110);
-    const inBay = smoothstep(bayEdge - 50, bayEdge + 110, x);
+    const bayEdge = 720 + 55 * Math.sin(z / 240) - 35 * Math.cos(z / 110);
+    const inBay = smoothstep(bayEdge - 40, bayEdge + 110, x);
     h = lerp(h, -26, inBay);
-    // Odaiba / Daikoku artificial port island out in Tokyo Bay
-    const odDist = Math.hypot((x - 860) / 1.15, (z - 180) / 1.35);
+    const odDist = Math.hypot((x - 920) / 1.15, (z - 180) / 1.35);
     const odaiba = 1 - smoothstep(155, 225, odDist);
     h = lerp(h, 4.2, odaiba);
-    return h;
+    return h * mask;
   }
   const maskCoast = smoothstep(680, 1050, dCity);
   let h = (fbm(n1, x / 750, z / 750, 4) * 60 + 22 + fbm(n2, x / 210, z / 210, 3) * 9) * maskCoast;
@@ -102,24 +99,33 @@ export class HeightField {
       for (let i = 0; i < n; i++) {
         const x = -WORLD_HALF + i * HF_CELL;
         let h = rawHeight(x, z);
+        const cdm = Math.max(Math.abs(x), Math.abs(z));
         const arr = grid.get(key(Math.floor(x / CS), Math.floor(z / CS)));
         if (arr) {
-          let best = 1e9, bh = 0, bhw = 10, bo = 0, bb = 0;
+          let best = 1e9, bh = 0, minNearH = 1e9;
           for (const s of arr) {
             const dx = s.b.x - s.a.x, dz = s.b.z - s.a.z;
             const l2 = dx * dx + dz * dz || 1e-6;
             let t = ((x - s.a.x) * dx + (z - s.a.z) * dz) / l2; t = clamp(t, 0, 1);
             const cx = s.a.x + dx * t, cz = s.a.z + dz * t;
             const d = Math.hypot(x - cx, z - cz) - s.hw;
-            if (d < best) { best = d; bh = lerp(s.a.h, s.b.h, t); bhw = s.hw; const sl = Math.sqrt(l2); bo = (-(x - cx) * dz + (z - cz) * dx) / sl; bb = lerp(s.a.bank || 0, s.b.bank || 0, t); }
+            const sl = Math.sqrt(l2);
+            const bo = (-(x - cx) * dz + (z - cz) * dx) / sl;
+            const bb = lerp(s.a.bank || 0, s.b.bank || 0, t);
+            const sh = lerp(s.a.h, s.b.h, t) + bb * clamp(bo, -s.hw, s.hw);
+            if (d < 8 && sh < minNearH) minNearH = sh;
+            if (d < best) { best = d; bh = sh; }
           }
-          bh += bb * clamp(bo, -bhw, bhw);
+          if (minNearH < 1e8 && best < 8) bh = Math.min(bh, minNearH);
           this.rd[j * n + i] = Math.min(best, 999);
-          if (best < 42) {
-            const w = smoothstep(3, 42, best);
-            h = lerp(bh - 0.3, h, w);
+          const inCity = cdm <= 612;
+          if (!inCity && best < 48) {
+            const w = smoothstep(14, 48, best);
+            const sub = 0.30 * (1 - smoothstep(0.8, 4.5, best));
+            h = lerp(bh - sub, h, w);
           }
         }
+        if (cdm <= 612) h = CITY_PLANE;
         this.data[j * n + i] = h;
       }
     }
@@ -140,25 +146,33 @@ export class HeightField {
   // Terrain cells are 10 m wide so they can't follow a 20 m road exactly; this removes wheels sinking into / floating over the asphalt.
   ground(x, z) {
     let t = this.get(x, z);
-    const cd = Math.max(Math.abs(x), Math.abs(z)); if (cd < 650) t += CITY_PLANE * (1 - smoothstep(612, 650, cd)); // city asphalt plane is drawn 4 cm above the terrain
+    const cd = Math.max(Math.abs(x), Math.abs(z));
+    if (cd <= 612) t = Math.max(t, CITY_PLANE);
     const arr = this.rgrid && this.rgrid.get(this.rkey(Math.floor(x / this.rcs), Math.floor(z / this.rcs)));
     if (!arr) return t;
-    let best = 1e9, bh = 0;
+    let best = 1e9, bh = 0, maxOnRoadH = -1e9;
     for (const sg of arr) {
       const dx = sg.b.x - sg.a.x, dz = sg.b.z - sg.a.z; const l2 = dx * dx + dz * dz || 1e-6;
       let u = ((x - sg.a.x) * dx + (z - sg.a.z) * dz) / l2; u = u < 0 ? 0 : u > 1 ? 1 : u;
       const px = x - sg.a.x - dx * u, pz = z - sg.a.z - dz * u;
       const d = Math.hypot(px, pz) - sg.hw;
-      if (d < best) {
-        best = d; bh = sg.a.h + (sg.b.h - sg.a.h) * u;
-        const bk = sg.a.bank;
-        if (bk !== undefined || sg.b.bank !== undefined) { const o = (-px * dz + pz * dx) / Math.sqrt(l2); bh += ((bk || 0) + ((sg.b.bank || 0) - (bk || 0)) * u) * (o < -sg.hw ? -sg.hw : o > sg.hw ? sg.hw : o); }
-      }
+      let sh = sg.a.h + (sg.b.h - sg.a.h) * u;
+      const bk = sg.a.bank;
+      if (bk !== undefined || sg.b.bank !== undefined) { const o = (-px * dz + pz * dx) / Math.sqrt(l2); sh += ((bk || 0) + ((sg.b.bank || 0) - (bk || 0)) * u) * (o < -sg.hw ? -sg.hw : o > sg.hw ? sg.hw : o); }
+      if (d <= 4.2 && sh > maxOnRoadH) maxOnRoadH = sh;
+      if (d < best) { best = d; bh = sh; }
     }
-    if (best > 3) return t;
+    if (maxOnRoadH > -1e8) bh = Math.max(bh, maxOnRoadH);
+    if (best > 5.5) return t;
     const roadY = bh + 0.13; // ribbon tops sit at +0.10..0.14
-    if (best <= 0) return roadY;
-    const k = best / 3; return roadY + (t - roadY) * (k * k * (3 - 2 * k));
+    if (best <= 0.6) return roadY;
+    const shoulderY = Math.max(t, bh + 0.06);
+    if (best <= 4.0) {
+      const k = (best - 0.6) / 3.4;
+      return roadY + (shoulderY - roadY) * (k * k * (3 - 2 * k));
+    }
+    const k = (best - 4.0) / 1.5;
+    return shoulderY + (t - shoulderY) * (k * k * (3 - 2 * k));
   }
   normal(x, z, out) {
     const e = 2;

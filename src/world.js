@@ -299,8 +299,11 @@ export class World {
       const k = j * n + i;
       const x = -WORLD_HALF + i * HF_CELL, z = -WORLD_HALF + j * HF_CELL;
       const h = this.hf.data[k];
+      const rd = this.hf.rd[k];
       const cdm = Math.max(Math.abs(x), Math.abs(z));
-      pos[k * 3] = x; pos[k * 3 + 1] = h - 0.45 * (1 - smoothstep(612, 660, cdm)); pos[k * 3 + 2] = z; // sunk 45 cm under the city asphalt (kills terrain/plane z-fighting)
+      // Sink terrain mesh ONLY strictly inside the 1224x1224 city plane (cdm < 606); outside the city pos.y === hf.data[k] so physics and visual terrain match 1:1
+      const citySink = 0.38 * (1 - smoothstep(592, 608, cdm));
+      pos[k * 3] = x; pos[k * 3 + 1] = h - citySink; pos[k * 3 + 2] = z;
       uv[k * 2] = x / 12; uv[k * 2 + 1] = z / 12;
       this.hf.normal(x, z, tmpN);
       const slope = 1 - tmpN.y;
@@ -310,7 +313,6 @@ export class World {
       c.lerp(cRock, smoothstep(0.12, 0.3, slope));
       c.lerp(cRock, smoothstep(140, 200, h));
       c.lerp(cSnow, smoothstep(260, 320, h + fbm(nz, x / 80, z / 80, 2) * 30));
-      const rd = this.hf.rd[k];
       c.lerp(cDirt, (1 - smoothstep(0, 6, rd)) * 0.8);
       if (x > 1300) c.lerp(cSand, 1 - smoothstep(1.0, 6, h));
       if (h < WATER_LEVEL) c.copy(cWet);

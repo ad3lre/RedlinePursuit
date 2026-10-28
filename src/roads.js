@@ -245,15 +245,21 @@ export function buildRoads(mapId = currentMap) {
       relaxCurve(rp, 9 * 3.2);
       const hA = pts[pts.length - 1].h, hB = L.h; // (connector end height is the fork height)
       // sibling ramps share the fork height for the first quarter so they never stack at different heights
-      rp.forEach((p, i) => { const t = i / (rp.length - 1); p.h = lerp(hA, hB, sstep(0.25, 1, t)); });
-      smoothPinned(rp, 2, 3, 1);
-      driveableProfile(rp, 0.09, 1);
-      // wherever the ramp runs over the highway deck, lock it to the deck height exactly; fade out past the edge
+      const forkPin = Math.max(4, Math.ceil(rp.length * 0.28));
+      rp.forEach((p, i) => { const t = i / (rp.length - 1); p.h = lerp(hA, hB, sstep(0.28, 1, t)); });
+      smoothPinned(rp, 2, 3, forkPin);
+      driveableProfile(rp, 0.09, forkPin);
+      for (let i = 0; i < forkPin; i++) rp[i].h = hA;
+      smoothPinned(rp, 2, 2, 2);
+      // wherever the ramp or its shoulder approaches the highway deck, lock it to the deck height so edges meet seamlessly
       for (let i = 1; i < rp.length; i++) {
+        const fk = 1 - sstep(forkPin - 2, forkPin + 3, i);
         const q = nearestOnPolyline(loopPts, true, rp[i].x, rp[i].z);
-        const w = 1 - sstep(LOOP_HALF_W + 2, LOOP_HALF_W + 40, q.d);
+        const w = (1 - sstep(LOOP_HALF_W + 9 + 16, LOOP_HALF_W + 9 + 64, q.d)) * (1 - fk);
         rp[i].h = lerp(rp[i].h, q.h, w);
+        if (i < forkPin - 1) rp[i].h = hA;
       }
+      rp[0].h = hA;
       rp[rp.length - 1].h = L.h;
       const ramp = { tag: c.tag, name: c.name + ' RAMP', pts: rp, halfW: 9, closed: false, kind: 'ramp', loopIndex: lp, parent: road };
       roads.push(ramp); ramps.push(ramp); road.ramps.push(ramp);

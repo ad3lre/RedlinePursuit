@@ -340,7 +340,7 @@ export class Car {
       this.vPitch = dt ? damp(this.vPitch ?? tp, tp, 18, dt) : tp;
       this.vRoll = dt ? damp(this.vRoll ?? tr, tr, 18, dt) : tr;
       const avg = (hFL + hFR + hRL + hRR) / 4;
-      const tl = avg - (this.pos.y - RIDE);
+      const tl = Math.max(-0.02, avg - (this.pos.y - RIDE));
       this.vLift = dt ? damp(this.vLift ?? tl, tl, 18, dt) : tl;
       lift = this.vLift;
     } else { this.vPitch = this.pitch; this.vRoll = this.roll; this.vLift = 0; }
@@ -369,7 +369,7 @@ export class Car {
       S.hv += (Math.sin(t * 61 + this.sirenPhase) * 0.5 + Math.sin(t * 97)) * 0.012 * rough;
       S.pv += Math.sin(t * 43 + 1.7) * 0.004 * rough;
       if (this.role === 'player' && this.grounded) S.h += Math.sin(t * (30 + this.rpm * 70)) * 0.0011 * (0.35 + this.rpm);
-      S.p = clamp(S.p, -0.12, 0.12); S.r = clamp(S.r, -0.16, 0.16); S.h = clamp(S.h, -0.14, 0.14);
+      S.p = clamp(S.p, -0.10, 0.10); S.r = clamp(S.r, -0.14, 0.14); S.h = clamp(S.h, -0.05, 0.12);
     }
     this.bodyPitch = S.p; this.bodyRoll = S.r;
     m.body.rotation.x = S.p;
