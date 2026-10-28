@@ -147,11 +147,13 @@ export class CopAI {
     this.dist = dist;
     this.replan -= dt;
     if (this.replan <= 0) {
-      this.replan = 0.8 + Math.random() * 0.4;
-      this.direct = dist < 110 && game.world.statics.los(car.pos.x, car.pos.z, tg.pos.x, tg.pos.z);
+      this.replan = 0.6 + Math.random() * 0.3;
+      const mx = (car.pos.x + tg.pos.x) * 0.5, mz = (car.pos.z + tg.pos.z) * 0.5;
+      const onSameRoad = !car.offroad && game.world.hf.onRoad(mx, mz) && (Math.abs(mx) > 612 || Math.abs(mz) > 612 ? game.world.hf.roadDist(mx, mz) < -1 : (Math.min(Math.abs(mx - Math.round(mx / 120) * 120), Math.abs(mz - Math.round(mz / 120) * 120)) < 9.5));
+      this.direct = dist < 38 && onSameRoad && game.world.statics.los(car.pos.x, car.pos.z, tg.pos.x, tg.pos.z);
       if (!this.direct) {
         const nav = game.world.nav;
-        const a = nav.nearest(car.pos.x, car.pos.z), b = nav.nearest(tg.pos.x + tg.vel.x * 1.5, tg.pos.z + tg.vel.y * 1.5);
+        const a = nav.nearest(car.pos.x, car.pos.z), b = nav.nearest(tg.pos.x + tg.vel.x * 0.8, tg.pos.z + tg.vel.y * 0.8);
         const ids = a && b ? nav.astar(a.id, b.id) : null;
         if (ids && ids.length > 1) {
           let d = 0; const pts = ids.map((id, i) => { const n = nav.nodes[id]; if (i) { const q = nav.nodes[ids[i - 1]]; d += Math.hypot(n.x - q.x, n.z - q.z); } return { x: n.x, z: n.z, d }; });
@@ -228,27 +230,49 @@ export class TrafficAI {
     this.car = car; this.game = game; this.cur = null; this.next = null; this.prev = null; this.stunned = 0;
     this.cruise = 14; this.stuck = 0; this.reverseT = 0;
   }
-  spawnAt(node, game) {
+  spawnAt(node, game, dirX = null, dirZ = null) {
     const nav = game.world.nav;
     this.prev = null; this.cur = node; this.stuck = 0; this.reverseT = 0;
-    const e = node.edges[Math.floor(Math.random() * node.edges.length)];
+    let e = node.edges[Math.floor(Math.random() * node.edges.length)];
+    if (dirX !== null && dirZ !== null) {
+      let bestD = -2;
+      for (const cand of node.edges) {
+        const m = nav.nodes[cand.to];
+        const ex = m.x - node.x, ez = m.z - node.z, el = Math.hypot(ex, ez) || 1;
+        const dot = (ex * dirX + ez * dirZ) / el;
+        if (dot > bestD) { bestD = dot; e = cand; }
+      }
+    }
     this.next = nav.nodes[e.to];
     const dx = this.next.x - node.x, dz = this.next.z - node.z; const l = Math.hypot(dx, dz) || 1;
-    const lane = this.lane = this.laneFor(node);
+    this.plannedExit = this.pickExit(nav, this.cur, this.next, dx / l, dz / l, true);
+    const lane = this.lane = this.laneFor(node, this.next);
     const x = node.x + (-dz / l) * lane, z = node.z + (dx / l) * lane;
     this.car.place(x, z, Math.atan2(dx, dz), this.cruise * 0.8);
     this.car.health = 1; this.car.wrecked = false; this.stunned = 0;
   }
-  laneFor(n) {
+  laneFor(n, next = null) {
     const city = Math.abs(n.x) <= 600 && Math.abs(n.z) <= 600;
-    if (city) { this.cruise = 13 + Math.random() * 4; return 5; }
+    if (city) {
+      this.cruise = 13 + Math.random() * 3.5;
+      // On the outer ±600 city perimeter street, keep lane offset smaller so right-hand traffic stays well inside the asphalt
+      const onBorder = Math.abs(n.x) >= 595 || Math.abs(n.z) >= 595 || (next && (Math.abs(next.x) >= 595 || Math.abs(next.z) >= 595));
+      return onBorder ? 3.2 : 4.6;
+    }
     const hw = n.h !== undefined && n.h > 0 && this.game.world.hf.roadDist(n.x, n.z) < 0 && Math.hypot(n.x, n.z) > 1000;
-    this.cruise = hw ? 24 + Math.random() * 5 : 19 + Math.random() * 4;
-    return hw ? 6.5 : 4.8;
+    this.cruise = hw ? 23 + Math.random() * 4 : 18 + Math.random() * 3.5;
+    return hw ? 5.8 : 4.2;
   }
   pickExit(nav, from, at, inDx, inDz, roll = false) {
-    const opts = at.edges.filter((e) => e.to !== from.id);
+    let opts = at.edges.filter((e) => e.to !== from.id);
     if (!opts.length) return at.edges[0];
+    // Avoid routing onto the outer ±600 city perimeter unless already on a connector
+    const interior = opts.filter((e) => {
+      const m = nav.nodes[e.to];
+      return !(Math.abs(m.x) === 600 && Math.abs(at.x) === 600 && Math.abs(m.z) <= 600) &&
+             !(Math.abs(m.z) === 600 && Math.abs(at.z) === 600 && Math.abs(m.x) <= 600);
+    });
+    if (interior.length) opts = interior;
     // Prefer continuing straight; never pick a near-U-turn when a milder option exists
     let best = opts[0], bs = -2;
     for (const e of opts) {
@@ -257,12 +281,11 @@ export class TrafficAI {
       const d = (ex * inDx + ez * inDz) / el;
       if (d > bs) { bs = d; best = e; }
     }
-    // Only randomize on the actual advance — peeking every frame must stay stable
-    if (roll && opts.length > 1 && Math.random() < 0.28) {
+    if (roll && opts.length > 1 && Math.random() < 0.25) {
       const mild = opts.filter((e) => {
         const m = nav.nodes[e.to];
         const ex = m.x - at.x, ez = m.z - at.z; const el = Math.hypot(ex, ez) || 1;
-        return (ex * inDx + ez * inDz) / el > 0.15;
+        return (ex * inDx + ez * inDz) / el > 0.2;
       });
       if (mild.length) best = mild[Math.floor(Math.random() * mild.length)];
     }
@@ -275,41 +298,50 @@ export class TrafficAI {
     const nav = game.world.nav;
     const c = this.cur, n = this.next;
     let dx = n.x - c.x, dz = n.z - c.z; const l = Math.hypot(dx, dz) || 1; dx /= l; dz /= l;
-    const lane = this.lane;
-    // Distance along the centreline (not the lane point) — lane offset was triggering early U-turns
     const along = (car.pos.x - c.x) * dx + (car.pos.z - c.z) * dz;
     const latOff = (car.pos.x - c.x) * (-dz) + (car.pos.z - c.z) * dx;
+    if (!this.plannedExit) this.plannedExit = this.pickExit(nav, c, n, dx, dz, true);
     if (along > l - 6 || (along > l * 0.55 && ((n.x - car.pos.x) * dx + (n.z - car.pos.z) * dz) < 0)) {
-      const best = this.pickExit(nav, c, n, dx, dz, true);
-      this.prev = c; this.cur = n; this.next = nav.nodes[best.to]; this.lane = this.laneFor(n);
+      const best = this.plannedExit || this.pickExit(nav, c, n, dx, dz, true);
+      this.prev = c; this.cur = n; this.next = nav.nodes[best.to];
+      const ndx = this.next.x - this.cur.x, ndz = this.next.z - this.cur.z, nl = Math.hypot(ndx, ndz) || 1;
+      this.plannedExit = this.pickExit(nav, this.cur, this.next, ndx / nl, ndz / nl, true);
+      this.lane = this.laneFor(this.cur, this.next);
     }
     // Recompute after possible advance
     const c2 = this.cur, n2 = this.next;
     let dx2 = n2.x - c2.x, dz2 = n2.z - c2.z; const l2 = Math.hypot(dx2, dz2) || 1; dx2 /= l2; dz2 /= l2;
     const along2 = (car.pos.x - c2.x) * dx2 + (car.pos.z - c2.z) * dz2;
-    const look = 12 + car.speed * 0.55;
-    let ax = c2.x + dx2 * clamp(along2 + look, 0, l2);
-    let az = c2.z + dz2 * clamp(along2 + look, 0, l2);
-    // Peek past the upcoming node so we don't slam the apex at full cruise
-    let turnDot = 1;
+    const exit = this.plannedExit || this.pickExit(nav, c2, n2, dx2, dz2, false);
+    const m = nav.nodes[exit.to];
+    const ex = m.x - n2.x, ez = m.z - n2.z; const el = Math.hypot(ex, ez) || 1;
+    const turnDot = (ex * dx2 + ez * dz2) / el;
+    const distToNode = Math.max(0, l2 - along2);
+    const look = turnDot < 0.75 ? clamp(9 + car.speed * 0.35, 9, 15) : 11 + car.speed * 0.5;
+    let tx, tz;
     if (along2 + look > l2 - 1) {
-      const exit = this.pickExit(nav, c2, n2, dx2, dz2);
-      const m = nav.nodes[exit.to];
-      const ex = m.x - n2.x, ez = m.z - n2.z; const el = Math.hypot(ex, ez) || 1;
-      turnDot = (ex * dx2 + ez * dz2) / el;
       const over = along2 + look - l2;
-      ax = n2.x + (ex / el) * over;
-      az = n2.z + (ez / el) * over;
+      const ax = n2.x + (ex / el) * over;
+      const az = n2.z + (ez / el) * over;
+      const nextLane = this.laneFor(n2, m);
+      tx = ax - (ez / el) * nextLane;
+      tz = az + (ex / el) * nextLane;
+    } else {
+      const ax = c2.x + dx2 * clamp(along2 + look, 0, l2);
+      const az = c2.z + dz2 * clamp(along2 + look, 0, l2);
+      tx = ax - dz2 * this.lane;
+      tz = az + dx2 * this.lane;
     }
-    const tx = ax - dz2 * this.lane, tz = az + dx2 * this.lane;
     const dd = Math.hypot(tx - car.pos.x, tz - car.pos.z);
-    const s = steerToward(car, tx, tz, 1.25);
-    // Rate-limit steer so traffic doesn't twitch
-    car.input.steer = lerp(car.input.steer || 0, s.steer, clamp(dt * 6, 0, 1));
+    const s = steerToward(car, tx, tz, 1.85);
+    car.input.steer = lerp(car.input.steer || 0, s.steer, clamp(dt * 12, 0, 1));
     let desired = this.cruise;
-    if (turnDot < 0.85) desired = Math.min(desired, 7 + 10 * Math.max(0, turnDot));
-    if (Math.abs(s.diff) > 0.3) desired = Math.min(desired, 8);
-    if (Math.abs(latOff - this.lane) > 6 || dd > 28) desired = Math.min(desired, 10);
+    if (turnDot < 0.85 && distToNode < 38) {
+      const vCorner = 7.5 + 8 * Math.max(0, turnDot);
+      desired = Math.min(desired, Math.sqrt(vCorner * vCorner + 2 * 9 * Math.max(0, distToNode - 8)));
+    }
+    if (Math.abs(s.diff) > 0.3) desired = Math.min(desired, 8.5);
+    if (Math.abs(latOff - this.lane) > 5 || dd > 28) desired = Math.min(desired, 9.5);
     const av = avoidance(car, game.carsNear(car, 30), 22);
     if (av.block < 20) desired = Math.min(desired, Math.max(0, (av.block - 7) * 1.2));
     // Stuck: reverse briefly instead of spinning in place at full lock

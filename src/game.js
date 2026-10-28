@@ -621,14 +621,14 @@ export class Game {
     const fx = Math.sin(pl.yaw), fz = Math.cos(pl.yaw);
     // Prefer packing cars ahead on the player's road so the frame stays "alive"
     if (!initial && this.route && Math.random() < 0.55) {
-      const ahead = (this.playerProgress || 0) + 80 + Math.random() * 280;
+      const ahead = (this.playerProgress || 0) + 90 + Math.random() * 260;
       if (ahead < this.route.length - 40) {
         const p = pointAtDist(this.route, ahead, {});
-        const lane = (Math.random() < 0.5 ? -1 : 1) * (3.2 + Math.random() * 4);
-        const x = p.x + -p.dz * lane, z = p.z + p.dx * lane;
-        if (!this.cars.some((o) => o !== c && (o.pos.x - x) ** 2 + (o.pos.z - z) ** 2 < 280)) {
-          const n = nav.nearest(x, z);
-          if (n) { c.ai.spawnAt(n, this); c.place(x, z, Math.atan2(p.dx, p.dz), c.ai.cruise * 0.85); return; }
+        const n = nav.nearest(p.x, p.z);
+        if (n && !this.cars.some((o) => o !== c && (o.pos.x - n.x) ** 2 + (o.pos.z - n.z) ** 2 < 280)) {
+          const sameDir = Math.random() < 0.55 ? 1 : -1;
+          c.ai.spawnAt(n, this, p.dx * sameDir, p.dz * sameDir);
+          return;
         }
       }
     }
@@ -674,8 +674,16 @@ export class Game {
       if (this.cars.some((o) => (o.pos.x - n.x) ** 2 + (o.pos.z - n.z) ** 2 < 100)) continue;
       const heavy = this.heat >= 4 && Math.random() < 0.3;
       const c = this.spawnCop(null, heavy ? COP_HEAVY : Math.random() < 0.5 ? COP_SPEC : COP_SPEC2);
-      const e = n.edges[0]; const m = nav.nodes[e.to];
-      c.place(n.x, n.z, Math.atan2(pl.pos.x - n.x, pl.pos.z - n.z), 20);
+      const toPlX = pl.pos.x - n.x, toPlZ = pl.pos.z - n.z;
+      let bestE = n.edges[0], bestDot = -2;
+      for (const cand of n.edges) {
+        const cm = nav.nodes[cand.to];
+        const ex = cm.x - n.x, ez = cm.z - n.z, el = Math.hypot(ex, ez) || 1;
+        const dot = (ex * toPlX + ez * toPlZ) / el;
+        if (dot > bestDot) { bestDot = dot; bestE = cand; }
+      }
+      const m = nav.nodes[bestE.to];
+      c.place(n.x, n.z, Math.atan2(m.x - n.x, m.z - n.z), 20);
       c.ai.target = this.pickTarget(c);
       return c;
     }
