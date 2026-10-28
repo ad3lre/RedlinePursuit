@@ -6,7 +6,7 @@ const pg = await br.newPage(); pg.on('pageerror', (e) => console.log('pageerror'
 await pg.goto('http://localhost:' + srv.address().port + '/?noperf'); await pg.waitForFunction('window.__rp', { timeout: 200000 });
 const res = await pg.evaluate(() => {
   const { game, world } = window.__rp; world.statics.collide = () => false; const out = {};
-  const cars = [0, 1, 2, 3];
+  const cars = [0, 1, 2, 3, 4];
   for (const ci of cars) {
     game.start('free', ci); for (let i = 0; i < 5; i++) game.update(1 / 60); game.state = 'play';
     const pl = game.player, name = pl.spec.id; const R = {};

@@ -13,6 +13,7 @@ export const PLAYER_CARS = [
   { id: 'kaiser', name: 'KAISER RS', kind: 'gt', top: 96, accel: 15.8, grip: 8.6, steer: 0.9, mass: 1.1, armor: 1.1, color: 0xe8ecf0, color2: 0x1846ff, livery: 'stripe', desc: 'Top-speed GT coupe' },
   { id: 'bruiser', name: 'BRUISER V8', kind: 'muscle', top: 85, accel: 19, grip: 8.8, steer: 0.95, mass: 1.45, armor: 1.5, color: 0xff7a00, color2: 0x111111, livery: 'split', desc: 'Ultimate ramming muscle car' },
   { id: 'cyber', name: 'CYBERTRUCK', kind: 'suv', model: 'cybertruck', top: 80, accel: 15.5, grip: 8.0, steer: 0.82, mass: 1.9, armor: 1.9, color: 0xb8bcc2, color2: 0x111111, livery: 'plain', desc: 'Stainless-steel armoured pickup' },
+  { id: 'gt3rs', name: 'GT3 RS', kind: 'super', model: 'gt3rs', top: 92, accel: 18, grip: 10.2, steer: 1.08, mass: 0.95, armor: 0.85, color: 0xd8d018, color2: 0x111111, livery: 'plain', desc: 'Track-bred rear-engine weapon' },
 ];
 export const RACER_COLORS = [[0x1ec8ff, 0x101010], [0x9aff1e, 0x101010], [0xffd400, 0x101010], [0xa020ff, 0xffffff], [0xffffff, 0xff2050], [0x202020, 0xff6a00]];
 // Traffic uses the "Generic passenger car pack" models with their own baked textures (no recolour). `w` = spawn weight.
@@ -169,38 +170,22 @@ export class Car {
     this.slip = slip;
 
     if (this.grounded) {
-      // cornering budget left after driving / braking
-      const al = Math.min(aLong, muG * 0.97);
-      let Fmax = muG * Math.sqrt(Math.max(0.06, 1 - (al / muG) ** 2));
-      const brk = clamp((-a - 6) / 16, 0, 1); // hard braking unloads the rear axle: less rear grip, more bite at the front
-      Fmax *= 1 - 0.15 * brk;
-      if (this.drifting) Fmax *= inp.handbrake ? 0.55 : 0.75;
-      if (this.wrecked) Fmax = 3;
-      // lateral tyre force from slip angle: rises, peaks near ~7 deg, then falls a little once the tyre slides
-      const slipA = Math.atan2(Math.abs(vR), Math.max(sp, 1.5));
-      const xs = slipA / 0.13;
-      const f = xs < 1 ? xs * (1.5 - 0.5 * xs * xs) : 1 - 0.14 * Math.min(1, (xs - 1) / 1.2);
-      // gravity along the cross-slope (road banking / camber): from the smoothed surface normal
-      if (this.normal.y > 0.5) vR += G * (this.normal.x * -fz + this.normal.z * fx) / this.normal.y * dt * 0.9;
-      const dv = Math.min(Math.abs(vR), Fmax * f * dt);
-      vR -= Math.sign(vR) * dv;
-      if (sp < 3 && Math.abs(vR) < 0.6) vR *= Math.exp(-14 * dt); // static friction
-      this.sliding = xs > 1;
-      if (this.drifting && vF > 0) vF += dv * 0.45; // keep momentum in drifts
-      // steering: road-wheel angle shrinks with speed so full lock == the grip limit (variable steering ratio)
-      const wb2 = Math.max(2.2, this.dims.wb * 2);
-      const dMax = (this.drifting ? 0.5 : clamp(Math.atan(wb2 * muG * 1.1 / Math.max(sp * sp, 30)), 0.003, 0.55)) * spec.steer;
-      this.steerAngle = damp(this.steerAngle, inp.steer * dMax, 10, dt);
-      this.steerWheel = damp(this.steerWheel || 0, inp.steer, 12, dt);
-      let target = vF * Math.tan(this.steerAngle) / wb2; // bicycle-model yaw rate
-      // grip-limited yaw: the car can't turn faster than the tyres bend its path. Past the slip peak the front pushes wide (understeer)
-      // and the nose is drawn back toward the direction of travel instead of the car spinning.
-      const cap = this.drifting ? Math.min(2.4, muG * 1.9 / Math.max(sp, 6)) : Math.min(2.4, 0.95 * Fmax * (xs > 1 ? f : 1) / Math.max(sp, 2));
-      target = clamp(target * (1 + 0.25 * brk), -cap, cap); // trail-braking tightens the line
+      let grip = spec.grip * (this.offroad ? 0.6 : 1) * (this.flatTimer > 0 ? 0.6 : 1);
+      if (this.drifting) grip *= inp.handbrake ? 0.14 : 0.3;
+      if (this.wrecked) grip = 2;
+      const nvR = vR * Math.exp(-grip * dt);
+      const lost = Math.abs(vR - nvR);
+      vR = nvR;
+      if (this.drifting && vF > 0) vF += lost * 0.45; // keep momentum in drifts
+      // steering
+      const steerMax = lerp(0.6, 0.14, clamp(sp / 65, 0, 1));
+      this.steerAngle = damp(this.steerAngle, inp.steer * steerMax, 10, dt);
+      const latAcc = 30 * spec.steer * (this.drifting ? 1.75 : 1) * (this.offroad ? 0.8 : 1);
+      const geomRate = (sp / 2.8) * Math.tan(Math.abs(inp.steer) * 0.6);
+      const maxRate = Math.min(geomRate, latAcc / Math.max(sp, 1), 2.4);
+      let target = Math.sign(inp.steer) * maxRate * Math.sign(vF || 1);
       if (this.drifting) target += -slip * 0.6 * Math.sign(vF); // natural counter-yaw
-      else if (xs > 1) target += -vR / Math.max(sp, 4) * 1.4 * Math.sign(vF || 1) * Math.min(1, xs - 1 + 0.3); // sliding: nose follows the velocity
-      const inertia = 10 / (0.6 + 0.4 * this.mass); // heavier cars rotate more lazily
-      this.angVel = damp(this.angVel, target, this.drifting ? 5 : inertia, dt);
+      this.angVel = damp(this.angVel, target, this.drifting ? 5 : 9, dt);
     } else {
       this.angVel *= Math.exp(-0.5 * dt);
     }

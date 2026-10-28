@@ -20,6 +20,12 @@
 - Changes: rescaled to metres, nose turned to +Z, fused axle meshes split into four wheels (tyres decimated), interior simplified (hi) or removed (lo), textures resized (2048 / 512 px WebP), meshopt-compressed. Source (not committed, 62 MB): `assets/source/cybertruck_hi_src.glb`; pipeline: `node tools/prepcybertruck.mjs assets/source/cybertruck_hi_src.glb assets/models/cybertruck_hi.glb hi` (and `... _lo.glb lo`).
 - **Tesla / Cybertruck are trademarks of Tesla, Inc.; verify trademark situation before any public/commercial release** (same caveat as the Ferrari).
 
+## 2024 Manthey Racing Porsche 911 GT3 RS (`assets/models/gt3rs_hi.glb` / `gt3rs_lo.glb`)
+- "2024 Manthey Racing Porsche 911 GT3 RS (REVAMP)" by **HYPR:IMPS 3D** on Sketchfab: https://sketchfab.com/3d-models/2024-manthey-racing-porsche-911-gt3-rs-revamp-09ccead93fb34944bde812d4b4684eff
+- Licensed under **Creative Commons Attribution 4.0 (CC BY 4.0)**: https://creativecommons.org/licenses/by/4.0/ . Commercial use allowed with credit.
+- Changes: world transforms baked, wheels regrouped into four spinning/steering nodes, geometry decimated (730k -> ~190k hi / ~81k lo triangles), duplicate materials merged, textures resized (1024 / 512 px WebP), meshopt-compressed. Source (not committed): `assets/source/gt3rs_src.glb`; pipeline: `node tools/prepgt3.mjs assets/source/gt3rs_src.glb assets/models/gt3rs_hi.glb hi` (and `... _lo.glb lo`).
+- **Porsche, 911 and GT3 RS are trademarks of Dr. Ing. h.c. F. Porsche AG; verify trademark situation before any public/commercial release** (same caveat as the Ferrari and the Cybertruck).
+
 ## Generic passenger car pack (traffic + rival cars: sedan, wagon, hatchback, compact, coupe, minivan, SUV, offroad, pickup, sport)
 - "Generic passenger car pack" by **Comrade1280** on Sketchfab: https://sketchfab.com/3d-models/generic-passenger-car-pack-20f9af9b8a404d5cb022ac6fe87f21f5
 - Licensed under **Creative Commons Attribution 4.0 (CC BY 4.0)**: https://creativecommons.org/licenses/by/4.0/ . Commercial use allowed with credit.
