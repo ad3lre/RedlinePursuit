@@ -12,8 +12,8 @@ export const PLAYER_CARS = [
   { id: 'viper', name: 'VIPER GT', kind: 'super', top: 88, accel: 17.5, grip: 9.5, steer: 1.0, mass: 1.0, armor: 1.0, color: 0xc8101a, color2: 0x101010, livery: 'stripe', desc: 'Balanced supercar' },
   { id: 'kaiser', name: 'KAISER RS', kind: 'gt', top: 96, accel: 15.8, grip: 8.6, steer: 0.9, mass: 1.1, armor: 1.1, color: 0xe8ecf0, color2: 0x1846ff, livery: 'stripe', desc: 'Top-speed GT coupe' },
   { id: 'bruiser', name: 'BRUISER V8', kind: 'muscle', top: 85, accel: 19, grip: 8.8, steer: 0.95, mass: 1.45, armor: 1.5, color: 0xff7a00, color2: 0x111111, livery: 'split', desc: 'Ultimate ramming muscle car' },
-  { id: 'cyber', name: 'CYBERTRUCK', kind: 'suv', model: 'cybertruck', top: 80, accel: 15.5, grip: 8.0, steer: 0.82, mass: 1.9, armor: 1.9, color: 0xb8bcc2, color2: 0x111111, livery: 'plain', desc: 'Stainless-steel armoured pickup' },
-  { id: 'gt3rs', name: 'GT3 RS', kind: 'super', model: 'gt3rs', top: 92, accel: 18, grip: 10.2, steer: 1.08, mass: 0.95, armor: 0.85, color: 0xd8d018, color2: 0x111111, livery: 'plain', desc: 'Track-bred rear-engine weapon' },
+  { id: 'cyber', name: 'CYBERTRUCK', kind: 'suv', cg: 0.74, model: 'cybertruck', top: 80, accel: 15.5, grip: 8.0, steer: 0.82, mass: 1.9, armor: 1.9, color: 0xb8bcc2, color2: 0x111111, livery: 'plain', desc: 'Stainless-steel armoured pickup' },
+  { id: 'gt3rs', name: 'GT3 RS', kind: 'super', cg: 0.44, model: 'gt3rs', top: 92, accel: 18, grip: 10.2, steer: 1.08, mass: 0.95, armor: 0.85, color: 0xd8d018, color2: 0x111111, livery: 'plain', desc: 'Track-bred rear-engine weapon' },
 ];
 export const RACER_COLORS = [[0x1ec8ff, 0x101010], [0x9aff1e, 0x101010], [0xffd400, 0x101010], [0xa020ff, 0xffffff], [0xffffff, 0xff2050], [0x202020, 0xff6a00]];
 // Traffic uses the "Generic passenger car pack" models with their own baked textures (no recolour). `w` = spawn weight.
@@ -63,6 +63,7 @@ export class Car {
     this.susp = { p: 0, pv: 0, r: 0, rv: 0, h: 0, hv: 0 };
     this.radius = Math.min(this.dims.W / 2 + 0.05, 1.15);
     this.circOff = this.dims.L / 2 - this.radius * 0.9;
+    this.cgH = spec.cg ?? ({ super: 0.46, gt: 0.5, muscle: 0.55, sedan: 0.58, suv: 0.72, truck: 0.95 }[spec.kind] ?? 0.55);
     this.mass = spec.mass || (spec.kind === 'truck' ? 3 : spec.kind === 'suv' ? 1.5 : 1.1);
     this.pos = new THREE.Vector3();
     this.vel = new THREE.Vector2();
@@ -170,22 +171,40 @@ export class Car {
     this.slip = slip;
 
     if (this.grounded) {
-      let grip = spec.grip * (this.offroad ? 0.6 : 1) * (this.flatTimer > 0 ? 0.6 : 1);
+      // ---- centre of gravity + load transfer -------------------------------------------------------------------
+      // cg: height of the centre of gravity (m). A high CG (SUV / truck) transfers more load in corners and under braking:
+      // less peak sideways grip, more body roll / pitch. A low CG (supercar) stays flat and planted.
+      const cg = this.cgH;
+      const brk = clamp((-a - 5) / 20, 0, 1);   // braking hard: weight goes forward, rear gets light -> a little rotation, a little less rear grip
+      const acc = clamp((a - 4) / 14, 0, 1);    // accelerating hard: weight goes rearward, front gets light -> a little understeer
+      let grip = spec.grip * 1.12 * (this.offroad ? 0.6 : 1) * (this.flatTimer > 0 ? 0.6 : 1) * (1 - 0.1 * brk) * (1 - 0.12 * (cg - 0.5)); // sideways grip: ~12% more than before
       if (this.drifting) grip *= inp.handbrake ? 0.14 : 0.3;
       if (this.wrecked) grip = 2;
       const nvR = vR * Math.exp(-grip * dt);
       const lost = Math.abs(vR - nvR);
       vR = nvR;
       if (this.drifting && vF > 0) vF += lost * 0.45; // keep momentum in drifts
-      // steering
-      const steerMax = lerp(0.6, 0.14, clamp(sp / 65, 0, 1));
-      this.steerAngle = damp(this.steerAngle, inp.steer * steerMax, 10, dt);
-      const latAcc = 30 * spec.steer * (this.drifting ? 1.75 : 1) * (this.offroad ? 0.8 : 1);
-      const geomRate = (sp / 2.8) * Math.tan(Math.abs(inp.steer) * 0.6);
-      const maxRate = Math.min(geomRate, latAcc / Math.max(sp, 1), 2.4);
-      let target = Math.sign(inp.steer) * maxRate * Math.sign(vF || 1);
+      // cornering budget (m/s^2): friction circle - driving or braking hard leaves less for turning; cg trims it
+      const al = Math.min(aLong, muG * 0.97);
+      const circle = Math.sqrt(Math.max(0.12, 1 - (al / muG) ** 2));
+      const capLat = muG * 1.15 * circle * (1 - 0.35 * (cg - 0.5)) * (this.drifting ? 1.75 : 1);
+      // steering: road-wheel angle is *proportional* to the wheel input, and full lock is scaled so it just reaches the grip limit at that speed.
+      // (before: 10% steering already saturated a ~3 g cap, so the car snapped round)
+      const wb2 = Math.max(2.2, this.dims.wb * 2);
+      const dMax = (this.drifting ? 0.5 : clamp(Math.atan(wb2 * capLat * spec.steer / Math.max(sp * sp, 25)), 0.02, 0.55));
+      this.steerAngle = damp(this.steerAngle, inp.steer * dMax, 10, dt);
+      this.steerWheel = damp(this.steerWheel || 0, inp.steer, 12, dt);
+      let target = vF * Math.tan(this.steerAngle) / wb2; // bicycle-model yaw rate
+      target *= (1 + 0.14 * brk) * (1 - 0.1 * acc);      // trail-braking tightens the line, power-on pushes wide
+      const capYaw = Math.min(2.4, capLat / Math.max(sp, 2.5));
+      target = clamp(target, -capYaw, capYaw);
       if (this.drifting) target += -slip * 0.6 * Math.sign(vF); // natural counter-yaw
-      this.angVel = damp(this.angVel, target, this.drifting ? 5 : 9, dt);
+      else target += -slip * 0.9 * clamp(sp / 35, 0, 1) * Math.sign(vF || 1); // straight-line stability: the nose is pulled back toward the direction of travel
+      // yaw response: builds a touch slower at speed and in heavier cars (rotational inertia), instant enough at low speed to stay easy
+      const resp = lerp(9, 6.5, clamp(sp / 60, 0, 1)) / (0.85 + 0.15 * this.mass);
+      this.angVel = damp(this.angVel, target, this.drifting ? 5 : resp, dt);
+      // cornering scrub: a car that is turned hard sheds a little speed
+      if (!this.drifting && sp > 8) vF -= Math.sign(vF) * Math.abs(this.angVel * vF) * 0.012 * dt * 60 * 0.5;
     } else {
       this.angVel *= Math.exp(-0.5 * dt);
     }
@@ -320,8 +339,9 @@ export class Car {
     // rebounds after bumps and landings, and shudders with the engine - so the car reads as a heavy object on springs.
     const S = this.susp, sdt = Math.min(dt || 0, 0.033);
     if (sdt > 0) {
-      const tp = clamp(-this.accelLong * 0.0046, -0.07, 0.07);
-      const tr = clamp(this.accelLat * 0.0068, -0.1, 0.1);
+      const cgk = this.cgH / 0.5;
+      const tp = clamp(-this.accelLong * 0.0046 * cgk, -0.08, 0.08);
+      const tr = clamp(this.accelLat * 0.0042 * cgk, -0.1, 0.1);
       const rough = (this.offroad ? 1 : 0.18) * clamp(this.speed / 40, 0, 1);
       const sub = 2, h = sdt / sub;
       for (let i = 0; i < sub; i++) {
