@@ -79,15 +79,16 @@ export class HeightField {
         let h = rawHeight(x, z);
         const arr = grid.get(key(Math.floor(x / CS), Math.floor(z / CS)));
         if (arr) {
-          let best = 1e9, bh = 0, bhw = 10;
+          let best = 1e9, bh = 0, bhw = 10, bo = 0, bb = 0;
           for (const s of arr) {
             const dx = s.b.x - s.a.x, dz = s.b.z - s.a.z;
             const l2 = dx * dx + dz * dz || 1e-6;
             let t = ((x - s.a.x) * dx + (z - s.a.z) * dz) / l2; t = clamp(t, 0, 1);
             const cx = s.a.x + dx * t, cz = s.a.z + dz * t;
             const d = Math.hypot(x - cx, z - cz) - s.hw;
-            if (d < best) { best = d; bh = lerp(s.a.h, s.b.h, t); bhw = s.hw; }
+            if (d < best) { best = d; bh = lerp(s.a.h, s.b.h, t); bhw = s.hw; const sl = Math.sqrt(l2); bo = (-(x - cx) * dz + (z - cz) * dx) / sl; bb = lerp(s.a.bank || 0, s.b.bank || 0, t); }
           }
+          bh += bb * clamp(bo, -bhw, bhw);
           this.rd[j * n + i] = Math.min(best, 999);
           if (best < 42) {
             const w = smoothstep(3, 42, best);
@@ -121,8 +122,13 @@ export class HeightField {
     for (const sg of arr) {
       const dx = sg.b.x - sg.a.x, dz = sg.b.z - sg.a.z; const l2 = dx * dx + dz * dz || 1e-6;
       let u = ((x - sg.a.x) * dx + (z - sg.a.z) * dz) / l2; u = u < 0 ? 0 : u > 1 ? 1 : u;
-      const d = Math.hypot(x - sg.a.x - dx * u, z - sg.a.z - dz * u) - sg.hw;
-      if (d < best) { best = d; bh = sg.a.h + (sg.b.h - sg.a.h) * u; }
+      const px = x - sg.a.x - dx * u, pz = z - sg.a.z - dz * u;
+      const d = Math.hypot(px, pz) - sg.hw;
+      if (d < best) {
+        best = d; bh = sg.a.h + (sg.b.h - sg.a.h) * u;
+        const bk = sg.a.bank;
+        if (bk !== undefined || sg.b.bank !== undefined) { const o = (-px * dz + pz * dx) / Math.sqrt(l2); bh += ((bk || 0) + ((sg.b.bank || 0) - (bk || 0)) * u) * (o < -sg.hw ? -sg.hw : o > sg.hw ? sg.hw : o); }
+      }
     }
     if (best > 3) return t;
     const roadY = bh + 0.13; // ribbon tops sit at +0.10..0.14

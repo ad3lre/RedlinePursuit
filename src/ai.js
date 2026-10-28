@@ -76,7 +76,7 @@ export class RacerAI {
     if (pr.off > 30) { const q = pointAtDist(this.route, this.progress + 8, P2); tx = q.x; tz = q.z; }
     const s = steerToward(car, tx, tz, 2.4);
     car.input.steer = s.steer;
-    let desired = Math.min(car.spec.top, curvatureSpeed(this.route, this.progress, 26 * car.spec.steer)) * this.skill;
+    let desired = Math.min(car.spec.top, curvatureSpeed(this.route, this.progress, car.gripLimit() * 0.8)) * this.skill;
     // rubber band relative to player
     const pl = game.player;
     if (game.multi && game.mode === 'free') car.boost = 1;
@@ -170,7 +170,7 @@ export class CopAI {
       this.pathIdx = pr.index;
       const t = pointAtDist(this.path, pr.dist + 10 + sp * 0.45, P);
       tx = t.x; tz = t.z;
-      desired = Math.min(car.spec.top, curvatureSpeed(this.path, pr.dist, 26));
+      desired = Math.min(car.spec.top, curvatureSpeed(this.path, pr.dist, car.gripLimit() * 0.8));
       if (pr.dist > this.path.length - 30) this.replan = 0;
     }
     const s = steerToward(car, tx, tz, 2.6);

@@ -274,7 +274,7 @@ export class World {
       for (let s = 0; s < 2; s++) {
         const o = (s === 0 ? x0 : x1) * halfW;
         const vi = k * 2 + s;
-        pos[vi * 3] = p.x + rx * o; pos[vi * 3 + 1] = p.h + yOff; pos[vi * 3 + 2] = p.z + rz * o;
+        pos[vi * 3] = p.x + rx * o; pos[vi * 3 + 1] = p.h + yOff + (p.bank ? p.bank * clamp(o, -LOOP_HALF_W, LOOP_HALF_W) : 0); pos[vi * 3 + 2] = p.z + rz * o;
         uv[vi * 2] = s; uv[vi * 2 + 1] = dist / vLen;
         nor[vi * 3 + 1] = 1;
       }
@@ -341,8 +341,9 @@ export class World {
       const p = pts[i], prev = pts[(i - 1 + n) % n], next = pts[(i + 1) % n];
       let tx = next.x - prev.x, tz = next.z - prev.z; const l = Math.hypot(tx, tz); tx /= l; tz /= l;
       let rx = -tz, rz = tx;
-      if (rx * p.x + rz * p.z < 0) { rx = -rx; rz = -rz; } // outward
-      railPts.push({ x: p.x + rx * off, z: p.z + rz * off, h: p.h });
+      let sgn = 1;
+      if (rx * p.x + rz * p.z < 0) { rx = -rx; rz = -rz; sgn = -1; } // outward (sgn: side relative to the ribbon's right vector)
+      railPts.push({ x: p.x + rx * off, z: p.z + rz * off, h: p.h + (p.bank || 0) * sgn * LOOP_HALF_W });
     }
     // beam ribbon (vertical)
     const count = n + 1;

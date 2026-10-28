@@ -65,7 +65,7 @@ export class Car {
     this.pos = new THREE.Vector3();
     this.vel = new THREE.Vector2();
     this.yaw = 0; this.angVel = 0; this.vy = 0; this.grounded = true; this.airTime = 0;
-    this.steerAngle = 0;
+    this.steerAngle = 0; this.steerWheel = 0; this.surfMu = 1; this.sliding = false;
     this.input = { throttle: 0, brake: 0, steer: 0, handbrake: 0, nitro: 0 };
     this.nitro = 0.5; this.nitroActive = false;
     this.health = 1; this.wrecked = false; this.wreckTime = 0;
@@ -82,6 +82,9 @@ export class Car {
     this.active = true;
     this.visible = true;
   }
+
+  // lateral grip limit in m/s^2 (no downforce): what the AI plans its corner speeds around
+  gripLimit() { return (this.spec.grip / 7.6) * 9.81; }
 
   get fwdX() { return Math.sin(this.yaw); }
   get fwdZ() { return Math.cos(this.yaw); }
@@ -120,22 +123,38 @@ export class Car {
     let maxV = spec.top * (this.nitroActive ? 1.2 : 1) * (this.flatTimer > 0 ? 0.55 : 1) * (0.82 + 0.18 * this.health) * (emp ? 0.5 : 1);
     if (this.offroad) maxV *= 0.62;
     if (this.boost) maxV *= this.boost;
-    let a = 0;
+
+    // ---- tyre budget ----------------------------------------------------------------------------------------
+    // One friction budget (mu*g) shared by braking, driving and cornering ("friction circle"). Surface, damage and
+    // aero downforce (supercars / GTs) scale it. spec.grip 7.6 == mu 1.0.
+    const G = 9.81;
+    const rdist = this.offroad ? world.hf.roadDist(this.pos.x, this.pos.z) : 0;
+    const surfMu = this.offroad ? (rdist < 3.5 ? 0.82 : 0.6) : 1; // gravel shoulder vs grass / dirt
+    this.surfMu = surfMu;
+    const df = spec.kind === 'super' ? 5.5e-5 : spec.kind === 'gt' ? 3.2e-5 : 0;
+    const muG = (spec.grip / 7.6) * surfMu * (this.flatTimer > 0 ? 0.6 : 1) * (1 + df * vF * vF) * G;
+
+    let a = 0, aLong = 0; // aLong: longitudinal tyre demand (drive or brake), eats into the cornering budget
     if (this.grounded) {
       if (inp.throttle > 0) {
         if (vF < maxV) {
           const r = clamp(vF / maxV, 0, 1);
-          a += spec.accel * 0.82 * (1 - Math.pow(r, 1.5) * 0.85) * inp.throttle * (this.boost || 1);
-          if (this.nitroActive) a += 13;
+          let ad = spec.accel * 0.82 * (1 - Math.pow(r, 1.5) * 0.85) * inp.throttle * (this.boost || 1);
+          if (this.nitroActive) ad += 13;
+          const trac = muG * 0.97; // traction limit: launches spin the wheels instead of teleporting
+          if (ad > trac) ad = trac;
+          a += ad; aLong = ad;
         } else a -= (vF - maxV) * 0.8;
       }
       if (inp.brake > 0) {
-        if (vF > 0.8) a -= 34 * inp.brake;
+        if (vF > 0.8) { const bk = Math.min(muG * 1.05 + 0.0004 * vF * vF, 30) * inp.brake; a -= bk; aLong = Math.max(aLong, bk); } // tyres + a little aero drag
         else if (vF > -16) a -= 9 * inp.brake;
       }
       if (!inp.throttle && !inp.brake) a -= Math.sign(vF) * Math.min(Math.abs(vF) / dt, 1.4 + 0.0006 * vF * vF);
       if (this.offroad) a -= vF * 0.18;
       if (inp.handbrake && sp > 1) a -= Math.sign(vF) * 7;
+      // gravity along the slope: climbs bleed speed, descents add it (grade from the smoothed ground speed)
+      if (sp > 6 && this.slopeVs !== undefined) a -= G * clamp(this.slopeVs / vF, -0.22, 0.22);
     }
     const vFprev = vF;
     vF += a * dt;
@@ -149,22 +168,35 @@ export class Car {
     this.slip = slip;
 
     if (this.grounded) {
-      let grip = spec.grip * (this.offroad ? 0.6 : 1) * (this.flatTimer > 0 ? 0.6 : 1);
-      if (this.drifting) grip *= inp.handbrake ? 0.14 : 0.3;
-      if (this.wrecked) grip = 2;
-      const nvR = vR * Math.exp(-grip * dt);
-      const lost = Math.abs(vR - nvR);
-      vR = nvR;
-      if (this.drifting && vF > 0) vF += lost * 0.45; // keep momentum in drifts
-      // steering
-      const steerMax = lerp(0.6, 0.14, clamp(sp / 65, 0, 1));
-      this.steerAngle = damp(this.steerAngle, inp.steer * steerMax, 10, dt);
-      const latAcc = 30 * spec.steer * (this.drifting ? 1.75 : 1) * (this.offroad ? 0.8 : 1);
-      const geomRate = (sp / 2.8) * Math.tan(Math.abs(inp.steer) * 0.6);
-      const maxRate = Math.min(geomRate, latAcc / Math.max(sp, 1), 2.4);
-      let target = Math.sign(inp.steer) * maxRate * Math.sign(vF || 1);
+      // cornering budget left after driving / braking
+      const al = Math.min(aLong, muG * 0.97);
+      let Fmax = muG * Math.sqrt(Math.max(0.06, 1 - (al / muG) ** 2));
+      const brk = clamp((-a - 6) / 16, 0, 1); // hard braking unloads the rear axle: less rear grip, more bite at the front
+      Fmax *= 1 - 0.15 * brk;
+      if (this.drifting) Fmax *= inp.handbrake ? 0.55 : 0.75;
+      if (this.wrecked) Fmax = 3;
+      // lateral tyre force from slip angle: rises, peaks near ~7 deg, then falls a little once the tyre slides
+      const slipA = Math.atan2(Math.abs(vR), Math.max(sp, 1.5));
+      const xs = slipA / 0.13;
+      const f = xs < 1 ? xs * (1.5 - 0.5 * xs * xs) : 1 - 0.14 * Math.min(1, (xs - 1) / 1.2);
+      // gravity along the cross-slope (road banking / camber): from the smoothed surface normal
+      if (this.normal.y > 0.5) vR += G * (this.normal.x * -fz + this.normal.z * fx) / this.normal.y * dt * 0.9;
+      const dv = Math.min(Math.abs(vR), Fmax * f * dt);
+      vR -= Math.sign(vR) * dv;
+      if (sp < 3 && Math.abs(vR) < 0.6) vR *= Math.exp(-14 * dt); // static friction
+      this.sliding = xs > 1;
+      if (this.drifting && vF > 0) vF += dv * 0.45; // keep momentum in drifts
+      // steering: road-wheel angle shrinks with speed so full lock == the grip limit (variable steering ratio)
+      const wb2 = Math.max(2.2, this.dims.wb * 2);
+      const dMax = (this.drifting ? 0.5 : clamp(Math.atan(wb2 * muG * 1.1 / Math.max(sp * sp, 30)), 0.003, 0.55)) * spec.steer;
+      this.steerAngle = damp(this.steerAngle, inp.steer * dMax, 10, dt);
+      this.steerWheel = damp(this.steerWheel || 0, inp.steer, 12, dt);
+      let target = vF * Math.tan(this.steerAngle) / wb2; // bicycle-model yaw rate
+      const cap = this.drifting ? Math.min(2.4, muG * 1.9 / Math.max(sp, 6)) : Math.min(2.4, 0.92 * Fmax / Math.max(sp, 2));
+      target = clamp(target * (1 + 0.25 * brk), -cap, cap); // trail-braking tightens the line
       if (this.drifting) target += -slip * 0.6 * Math.sign(vF); // natural counter-yaw
-      this.angVel = damp(this.angVel, target, this.drifting ? 5 : 9, dt);
+      const inertia = 10 / (0.6 + 0.4 * this.mass); // heavier cars rotate more lazily
+      this.angVel = damp(this.angVel, target, this.drifting ? 5 : inertia, dt);
     } else {
       this.angVel *= Math.exp(-0.5 * dt);
     }
@@ -327,7 +359,7 @@ export class Car {
       w.spin.rotation.x = this.wheelSpin;
       if (w.front) w.pivot.rotation.y = this.steerAngle * 1.2;
     }
-    if (this.interior) this.interior.wheel.rotation.z = -this.steerAngle * 3;
+    if (this.interior) this.interior.wheel.rotation.z = -(this.steerWheel || 0) * 1.5;
     // brake lights
     const braking = this.input.brake > 0.1 && this.vF > 1;
     m.tailMat.emissiveIntensity = braking ? 6 : 1.4;

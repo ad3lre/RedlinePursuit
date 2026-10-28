@@ -15,12 +15,12 @@ const res = await pg.evaluate(async (QUICK) => {
     const pts = r.pts; const stats = { name: r.name + ' ' + r.kind, hits: 0, stuck: 0, air: 0, maxGap: 0, steps: 0, maxOff: 0 };
     const a = pts[2], b = pts[3]; pl.place(a.x, a.z, Math.atan2(b.x - a.x, b.z - a.z), 25); pl.health = 1; pl.wrecked = false;
     let idx = 2, lowSpeed = 0, prev = game.onImpact; let impacts = 0; game.onImpact = (...args) => { impacts++; return prev.apply(game, args); };
-    const maxT = 60 * 120; let t = 0;
+    const maxT = 60 * 330; let t = 0;
     while (idx < pts.length - 4 && t++ < maxT) {
       // pure pursuit on the polyline
       let look = Math.min(pts.length - 1, idx + 4); const tg = pts[look];
       const dx = tg.x - pl.pos.x, dz = tg.z - pl.pos.z; let da = Math.atan2(dx, dz) - pl.yaw; da = Math.atan2(Math.sin(da), Math.cos(da));
-      pl.input.steer = Math.max(-1, Math.min(1, da * 2.2)); pl.input.throttle = pl.speed < 30 ? 1 : 0.2; pl.input.brake = 0; pl.input.nitro = 0; pl.input.handbrake = 0;
+      pl.input.steer = Math.max(-1, Math.min(1, da * 2.2)); pl.input.throttle = pl.speed < 30 ? 1 : 0.2; pl.input.brake = pl.speed > 33 ? 0.6 : 0; pl.input.nitro = 0; pl.input.handbrake = 0;
       for (let s = 0; s < 3; s++) { pl.step(1 / 180); game.carCollisions(); }
       while (idx < pts.length - 1 && Math.hypot(pts[idx].x - pl.pos.x, pts[idx].z - pl.pos.z) < 12) idx++;
       const g = world.heightAt(pl.pos.x, pl.pos.z) + 0.02; stats.maxGap = Math.max(stats.maxGap, Math.abs(pl.pos.y - g)); if (!pl.grounded) { stats.air++; if (!stats.airAt) { const gg = world.heightAt(pl.pos.x, pl.pos.z) + 0.02; const seg = pts[Math.max(0, idx - 1)]; stats.airAt = idx + '/' + pts.length + ' y-g=' + (pl.pos.y - gg).toFixed(2) + ' vy=' + pl.vy.toFixed(1) + ' off=' + Math.hypot(pl.pos.x - seg.x, pl.pos.z - seg.z).toFixed(1) + ' roadDist=' + world.hf.roadDist(pl.pos.x, pl.pos.z).toFixed(1) + ' prevG=' + (pl.prevG ?? 0).toFixed(2) + ' g=' + gg.toFixed(2) + ' h=' + pts[idx].h.toFixed(1) + ' v=' + pl.speed.toFixed(0); } }

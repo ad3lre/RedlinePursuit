@@ -230,6 +230,21 @@ export function buildRoads() {
       roads.push(ramp); ramps.push(ramp); road.ramps.push(ramp);
     }
   }
+  // ---- banking (superelevation): the highway tilts into its bends, flat where the ramps merge onto the deck ----
+  const MAXB = 0.055;
+  let bank = loopPts.map((b, i) => {
+    const a = loopPts[(i - 1 + nL) % nL], c = loopPts[(i + 1) % nL];
+    const l1 = Math.hypot(b.x - a.x, b.z - a.z) || 1, l2 = Math.hypot(c.x - b.x, c.z - b.z) || 1;
+    const cross = ((b.x - a.x) / l1) * ((c.z - b.z) / l2) - ((b.z - a.z) / l1) * ((c.x - b.x) / l2);
+    const kappa = cross / ((l1 + l2) / 2);
+    return -Math.sign(kappa) * clamp(Math.abs(kappa) * 60, 0, MAXB);
+  });
+  for (let pass = 0; pass < 6; pass++) bank = bank.map((_, i) => { let sum = 0; for (let k = -8; k <= 8; k++) sum += bank[(i + k + nL) % nL]; return sum / 17; });
+  loopPts.forEach((pt, i) => {
+    let w = 1;
+    for (const c of connectors) { const d = Math.min(Math.abs(i - c.loopIndex), nL - Math.abs(i - c.loopIndex)); w = Math.min(w, sstep(38, 58, d)); }
+    pt.bank = bank[i] * w;
+  });
   return { roads, loop, connectors, ramps, loopIndexAtAngle };
 }
 
