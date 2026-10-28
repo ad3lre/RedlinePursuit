@@ -6,4 +6,5 @@ node build.mjs
 DEST=/home/founder/prod/chase/www
 mkdir -p "$DEST"
 cp index.html game.js "$DEST/"
+(sudo -n systemctl restart chase.service 2>/dev/null || systemctl restart chase.service 2>/dev/null || true)
 echo "deployed -> $DEST"
