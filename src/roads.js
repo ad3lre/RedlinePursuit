@@ -340,6 +340,7 @@ export function buildNav(net) {
       r.navIds = rid;
     }
   }
+  nav.ramps = net.roads.filter((r) => r.kind === 'ramp').map((r) => ({ name: r.name, loopIndex: r.loopIndex, navIds: r.navIds }));
   nav.buildGrid();
   nav.cityId = (x, z) => nav.keyMap.get(ck(x, z));
   nav.loopId = (ang) => loopIds[net.loopIndexAtAngle(ang)];
@@ -348,41 +349,44 @@ export function buildNav(net) {
 
 // Build a route polyline from a list of nav node ids (waypoints)
 export function buildRoute(nav, wps) {
-  const ids = [];
+  let ids = [];
   for (let i = 0; i < wps.length - 1; i++) {
     const p = nav.astar(wps[i], wps[i + 1]);
     if (!p) continue;
     if (ids.length) p.shift();
     ids.push(...p);
   }
+  // remove A-B-A reversals left over at leg joins
+  for (let i = 2; i < ids.length; i++) if (ids[i] === ids[i - 2]) { ids.splice(i - 1, 2); i = Math.max(1, i - 2); }
   const pts = ids.map((id) => ({ x: nav.nodes[id].x, z: nav.nodes[id].z }));
-  // chamfer sharp corners slightly for smoother AI lines
-  const out = [];
-  for (let i = 0; i < pts.length; i++) out.push(pts[i]);
-  // cumulative distance
+  const out = pts;
   let d = 0;
   out[0].d = 0;
   for (let i = 1; i < out.length; i++) { d += Math.hypot(out[i].x - out[i - 1].x, out[i].z - out[i - 1].z); out[i].d = d; }
   return { pts: out, length: d, ids };
 }
-
-// Projects a position onto route, searching near a hint index.
 export function projectOnRoute(route, x, z, hint = 0, window = 40) {
   const pts = route.pts;
-  let best = hint, bd = 1e18, bt = 0;
-  const lo = Math.max(0, hint - window), hi = Math.min(pts.length - 2, hint + window);
-  for (let i = lo; i <= hi; i++) {
-    const a = pts[i], b = pts[i + 1];
-    const dx = b.x - a.x, dz = b.z - a.z; const l2 = dx * dx + dz * dz || 1e-6;
-    let t = ((x - a.x) * dx + (z - a.z) * dz) / l2; t = clamp(t, 0, 1);
-    const cx = a.x + dx * t, cz = a.z + dz * t;
-    const dd = (x - cx) ** 2 + (z - cz) ** 2;
-    if (dd < bd) { bd = dd; best = i; bt = t; }
+  const scan = (lo, hi) => {
+    let best = lo, bd = 1e18, bt = 0;
+    for (let i = lo; i <= hi; i++) {
+      const a = pts[i], b = pts[i + 1];
+      const dx = b.x - a.x, dz = b.z - a.z; const l2 = dx * dx + dz * dz || 1e-6;
+      let t = ((x - a.x) * dx + (z - a.z) * dz) / l2; t = clamp(t, 0, 1);
+      const cx = a.x + dx * t, cz = a.z + dz * t;
+      const dd = (x - cx) ** 2 + (z - cz) ** 2 + (i === lo ? 0 : 0);
+      if (dd < bd) { bd = dd; best = i; bt = t; }
+    }
+    return { best, bd, bt };
+  };
+  let r = scan(Math.max(0, hint - window), Math.min(pts.length - 2, hint + window));
+  if (r.bd > 25 * 25) { // lost it (teleport / respawn / long detour): search the whole route, nearest segment wins, ties -> closest to the old hint
+    const g = scan(0, pts.length - 2);
+    if (g.bd < r.bd - 4) r = g;
   }
-  const a = pts[best], b = pts[Math.min(best + 1, pts.length - 1)];
-  return { index: best, dist: a.d + (b.d - a.d) * bt, off: Math.sqrt(bd) };
+  const a = pts[r.best], b = pts[Math.min(r.best + 1, pts.length - 1)];
+  return { index: r.best, dist: a.d + (b.d - a.d) * r.bt, off: Math.sqrt(r.bd) };
 }
-
 export function pointAtDist(route, dist, out = {}) {
   const pts = route.pts;
   dist = clamp(dist, 0, route.length);

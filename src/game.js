@@ -124,7 +124,14 @@ export class Game {
     const nav = this.world.nav;
     const C = (x, z) => nav.cityId(x, z);
     const L = (d) => nav.loopId((d * Math.PI) / 180);
-    const wps = [C(0, 360), C(0, -600), L(-115), L(-135), L(-160), L(180), L(155), L(130), L(108), C(0, 600), C(360, 600), C(360, 240), C(120, 240), C(120, -120), C(-240, -120), C(-240, 120)];
+    // The race runs the coast loop in ONE direction (decreasing loop index = decreasing compass angle). Entry / exit ramps are pinned:
+    // letting A* choose them picked a ramp past the first loop waypoint and the route doubled back on itself (a 176 degree U-turn,
+    // which made bots circle and the wrong-way / progress logic fight the player).
+    const ramps = nav.ramps || [];
+    const pick = (name) => ramps.filter((r) => r.name.startsWith(name)).sort((a, b) => b.loopIndex - a.loopIndex)[0];
+    const pickLow = (name) => ramps.filter((r) => r.name.startsWith(name)).sort((a, b) => a.loopIndex - b.loopIndex)[0];
+    const entry = pickLow('NORTH AVE'), exit = pick('SOUTH AVE'); // entry merges heading with the race direction (lower index), exit leaves it (higher index)
+    const wps = [C(0, 360), C(0, -600), entry.navIds[0], entry.navIds[entry.navIds.length - 1], L(-115), L(-135), L(-160), L(180), L(155), L(130), L(108), exit.navIds[exit.navIds.length - 1], exit.navIds[0], C(0, 600), C(360, 600), C(360, 240), C(120, 240), C(120, -120), C(-240, -120), C(-240, 120)];
     this._route = buildRoute(nav, wps);
     return this._route;
   }
