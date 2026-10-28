@@ -89,7 +89,7 @@ export class RacerAI {
     if (av.block < 14 && sp > 10) desired = Math.min(desired, sp * 0.9);
     if (Math.abs(s.diff) > 0.6) desired = Math.min(desired, 18);
     speedControl(car, desired);
-    car.input.handbrake = Math.abs(s.diff) > 0.5 && sp > 22 ? 1 : 0;
+    car.input.handbrake = Math.abs(s.diff) > 0.9 && sp > 22 && sp < 40 ? 1 : 0; // only for slow hairpins: at speed the tyre model scrubs speed anyway
     car.input.nitro = car.nitro > 0.2 && desired > car.spec.top * 0.85 && Math.abs(s.diff) < 0.1 ? 1 : 0;
     car.nitro = Math.min(1, car.nitro + dt * 0.035);
     this.handleStuck(dt, game);
@@ -179,7 +179,7 @@ export class CopAI {
     if (Math.abs(s.diff) > 0.7) desired = Math.min(desired, 16);
     desired = Math.min(desired, car.spec.top * 1.1);
     speedControl(car, desired);
-    car.input.handbrake = Math.abs(s.diff) > 0.55 && sp > 22 ? 1 : 0;
+    car.input.handbrake = Math.abs(s.diff) > 0.9 && sp > 22 && sp < 40 ? 1 : 0;
     car.input.nitro = car.nitro > 0.2 && dist > 45 && Math.abs(s.diff) < 0.1 ? 1 : 0;
     car.nitro = Math.min(1, car.nitro + dt * 0.05);
     // rubber band

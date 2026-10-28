@@ -192,9 +192,12 @@ export class Car {
       this.steerAngle = damp(this.steerAngle, inp.steer * dMax, 10, dt);
       this.steerWheel = damp(this.steerWheel || 0, inp.steer, 12, dt);
       let target = vF * Math.tan(this.steerAngle) / wb2; // bicycle-model yaw rate
-      const cap = this.drifting ? Math.min(2.4, muG * 1.9 / Math.max(sp, 6)) : Math.min(2.4, 0.92 * Fmax / Math.max(sp, 2));
+      // grip-limited yaw: the car can't turn faster than the tyres bend its path. Past the slip peak the front pushes wide (understeer)
+      // and the nose is drawn back toward the direction of travel instead of the car spinning.
+      const cap = this.drifting ? Math.min(2.4, muG * 1.9 / Math.max(sp, 6)) : Math.min(2.4, 0.95 * Fmax * (xs > 1 ? f : 1) / Math.max(sp, 2));
       target = clamp(target * (1 + 0.25 * brk), -cap, cap); // trail-braking tightens the line
       if (this.drifting) target += -slip * 0.6 * Math.sign(vF); // natural counter-yaw
+      else if (xs > 1) target += -vR / Math.max(sp, 4) * 1.4 * Math.sign(vF || 1) * Math.min(1, xs - 1 + 0.3); // sliding: nose follows the velocity
       const inertia = 10 / (0.6 + 0.4 * this.mass); // heavier cars rotate more lazily
       this.angVel = damp(this.angVel, target, this.drifting ? 5 : inertia, dt);
     } else {
