@@ -313,11 +313,12 @@ export class AudioSys {
   }
 
   // Realistic gear shift: mechanical linkage clunk + clutch thump + upshift exhaust bark / turbo chirp OR downshift rev-match blip
-  gearShift(dir = 1, rpm = 0.7, thr = 0.8, pr = null) {
+  gearShift(dir = 1, rpm = 0.7, thr = 0.8, pr = null, quiet = false) {
     if (!this.ready) return;
     pr = pr || resolveEngine(null, 'super');
     // Mechanical dog-box / synchro engagement clunk + driveline thump
-    this.tone({ type: 'triangle', f0: 145, f1: 48, dur: 0.065, gain: 0.22, attack: 0.002 });
+    this.tone({ type: 'triangle', f0: 145, f1: 48, dur: 0.065, gain: quiet ? 0.12 : 0.22, attack: 0.002 });
+    if (quiet) return;
     this.burst({ dur: 0.032, type: 'bandpass', f0: 2100, f1: 950, q: 3.5, gain: 0.11, attack: 0.001 });
     if (dir > 0) {
       // Upshift: fuel-cut exhaust bark/bang in the tailpipe + brief wastegate chirp if under load
@@ -327,10 +328,11 @@ export class AudioSys {
       if (thr > 0.65 && rpm > 0.55 && pr.turbo > 0.4) this.blowoff(0.55 * pr.turbo);
     } else {
       // Downshift: throttle blip growl + overrun pop (pitched to real firing Hz)
-      const bf = firingHz(pr, absRpm(pr, clamp(rpm + 0.18, 0.3, 1)));
-      this.tone({ t: 0.01, type: 'sawtooth', f0: bf * 0.85, f1: bf * 1.25, dur: 0.11, gain: 0.14, attack: 0.012 });
-      this.burst({ t: 0.02, dur: 0.09, type: 'bandpass', f0: bf * 3.2, f1: bf * 1.8, q: 2.2, gain: 0.12, pink: true });
-      if (rpm > 0.45 && Math.random() < 0.65) this.burblePop(0.45);
+      // Downshift: short low rev-match blip at the real firing frequency (low-passed, no high sawtooth sweep)
+      const bf = firingHz(pr, absRpm(pr, clamp(rpm + 0.08, 0.15, 0.9)));
+      this.tone({ t: 0.01, type: 'triangle', f0: bf * 0.9, f1: bf * 1.08, dur: 0.09, gain: 0.08, attack: 0.012 });
+      this.burst({ t: 0.02, dur: 0.07, type: 'lowpass', f0: Math.min(1400, bf * 2.2), f1: Math.min(900, bf * 1.4), q: 0.8, gain: 0.06, pink: true });
+      if (rpm > 0.55 && pr.burble > 0.8 && Math.random() < 0.35) this.burblePop(0.3);
     }
   }
   shiftPop() { this.gearShift(1, 0.75, 0.85); }

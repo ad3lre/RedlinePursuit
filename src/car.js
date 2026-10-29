@@ -104,16 +104,23 @@ export class Car {
     const eng = resolveEngine(this.spec.id, this.spec.kind);
     if (eng.electric > 0.5) return null;
     const shifts = eng.shiftSpeeds?.length ? eng.shiftSpeeds : [16, 29, 42, 56, 71];
-    return { ratios: [0, ...shifts, 999], maxGear: Math.min(6, shifts.length + 1) };
+    const maxGear = Math.min(6, shifts.length + 1);
+    const top = this.spec.top;
+    // vRed(g): road speed (m/s) at which gear g hits redline. Engine RPM is proportional to road speed in a gear
+    // (fixed ratio), so rpm/redline = speed / vRed(g). Auto upshifts happen at ~92% of redline.
+    const vRed = (g) => (g < maxGear ? shifts[g - 1] / 0.92 : Math.max(top / 0.95, shifts[maxGear - 2] / 0.92 * 1.15));
+    return { ratios: [0, ...shifts, 999], maxGear, vRed, eng };
   }
 
   // Manual shift (dir +1 up / -1 down). The first call converts the gearbox to manual permanently.
+  // Downshifts that would over-rev the engine are refused (rev-protection, like real manual-mode gearboxes).
   shiftManual(dir) {
     const b = this.gearBands();
     if (!b) return; // EV: single-speed, nothing to shift
     this.manual = true;
     const g = clamp((this.gear || 1) + dir, 1, b.maxGear);
     if (g === this.gear) return;
+    if (dir < 0 && Math.abs(this.vF) / b.vRed(g) > 1.0) { this.shiftDenied = 1; return; }
     this.shifted = dir > 0 ? 1 : -1;
     this.shiftTimer = dir > 0 ? 0.3 : 0.2;
     this.gear = g;
@@ -170,11 +177,12 @@ export class Car {
     const mb = this.manual ? this.gearBands() : null;
     if (mb) {
       const g = clamp(this.gear || 1, 1, mb.maxGear);
-      if (g < mb.maxGear) maxV = Math.min(maxV, mb.ratios[g] * 1.12);
-      const lo = mb.ratios[g - 1];
-      if (g > 1 && sp < lo * 0.86) gearPull = clamp(0.25 + 0.75 * sp / (lo * 0.86), 0.25, 1);
+      if (g < mb.maxGear) maxV = Math.min(maxV, mb.vRed(g)); // rev limiter
+      const rf = sp / mb.vRed(g); // fraction of redline
+      if (g > 1 && rf < 0.45) gearPull = clamp(0.25 + 0.75 * rf / 0.45, 0.25, 1); // lugging: little torque low in the rev range
       if (this.shiftTimer > 0) gearPull *= 0.35; // clutch in during the shift
-    }
+      this._engBrake = this.shiftTimer > 0 ? 0 : (0.6 + 2.4 * rf) * (1.4 - g / mb.maxGear); // off-throttle engine braking, stronger in low gears
+    } else this._engBrake = 0;
 
     // ---- tyre budget ----------------------------------------------------------------------------------------
     // One friction budget (mu*g) shared by braking, driving and cornering ("friction circle"). Surface, damage and
@@ -202,7 +210,7 @@ export class Car {
         if (vF > 0.8) { const bk = Math.min(muG * 1.05 + 0.0004 * vF * vF, 30) * inp.brake; a -= bk; aLong = Math.max(aLong, bk); } // tyres + a little aero drag
         else if (vF > -16) a -= 9 * inp.brake;
       }
-      if (!inp.throttle && !inp.brake) a -= Math.sign(vF) * Math.min(Math.abs(vF) / dt, 1.4 + 0.0006 * vF * vF);
+      if (!inp.throttle && !inp.brake) a -= Math.sign(vF) * Math.min(Math.abs(vF) / dt, 1.4 + 0.0006 * vF * vF + (vF > 3 ? this._engBrake || 0 : 0));
       if (this.offroad) a -= vF * 0.18;
       if (inp.handbrake && sp > 1) a -= Math.sign(vF) * 7;
       // gravity along the slope: climbs bleed speed, descents add it (grade from the smoothed ground speed)
@@ -344,9 +352,8 @@ export class Car {
         : clamp(inp.throttle, 0, 1);
       this.rpm = damp(this.rpm, Math.max(targetRpm, 0.02), 10, dt);
     } else {
-      const shifts = eng.shiftSpeeds?.length ? eng.shiftSpeeds : [16, 29, 42, 56, 71];
-      const ratios = [0, ...shifts, 999];
-      const maxGear = Math.min(6, shifts.length + 1);
+      const gb = this.gearBands();
+      const { ratios, maxGear } = gb;
       let gear = clamp(this.gear || 1, 1, maxGear);
       if (!this.manual) {
         while (gear < maxGear && av > ratios[gear]) gear++;
@@ -358,13 +365,18 @@ export class Car {
         this.gear = gear;
       }
       if (this.shiftTimer > 0) this.shiftTimer -= dt;
-      const lo = ratios[gear - 1], hi = Math.min(ratios[gear], spec.top * 1.2);
-      const tr = clamp((av - lo) / Math.max(0.01, hi - lo), 0, 1);
-      // Map gear progress into idle→redline: launch sits higher, cruise sits mid-band
-      const targetRpm = this.grounded ? 0.18 + tr * 0.78 : 0.95 * (inp.throttle || 0.4);
+      // Physical RPM: in a fixed gear, engine RPM = redline × (road speed / speed-at-redline for that gear).
+      // An upshift drops RPM by the ratio step, a downshift raises it — exactly like a real gearbox.
+      const idle = eng.idleRpm || 700, red = eng.redlineRpm || 6500;
+      const wheelRpm = red * clamp(av / gb.vRed(gear), 0, 1);
+      // clutch slip at low road speed: idle off-throttle, launch revs (~45% of the band) on throttle
+      const launch = inp.throttle > 0 ? idle + (red - idle) * (0.3 + 0.2 * inp.throttle) : idle;
+      const engRpm = Math.max(wheelRpm, gear === 1 || av < 4 ? Math.min(launch, Math.max(idle, launch * (1 - av / 8)) ) : idle);
+      let targetRpm = clamp((engRpm - idle) / (red - idle), 0, 1);
+      if (!this.grounded) targetRpm = Math.max(targetRpm, 0.95 * (inp.throttle || 0)); // wheels unloaded: free-rev
       const shifting = this.shiftTimer > 0;
-      const lam = shifting ? (this.shifted > 0 ? 4.5 : 16) : (targetRpm > this.rpm ? 11 : 6);
-      this.rpm = damp(this.rpm, Math.max(targetRpm, inp.throttle > 0 && sp < 3 ? 0.55 : 0.18), lam, dt);
+      const lam = shifting ? (this.shifted > 0 ? 9 : 14) : (targetRpm > this.rpm ? 12 : 8);
+      this.rpm = damp(this.rpm, targetRpm, lam, dt);
     }
   }
 
