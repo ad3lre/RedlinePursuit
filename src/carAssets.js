@@ -18,6 +18,8 @@ import vitoHi from '../assets/models/vito_hi.glb';
 import vitoLo from '../assets/models/vito_lo.glb';
 import miniHi from '../assets/models/mini_hi.glb';
 import miniLo from '../assets/models/mini_lo.glb';
+import corollaHi from '../assets/models/corolla_hi.glb';
+import corollaLo from '../assets/models/corolla_lo.glb';
 import pack_compact from '../assets/models/pack_compact.glb';
 import pack_coupe from '../assets/models/pack_coupe.glb';
 import pack_hatchback from '../assets/models/pack_hatchback.glb';
@@ -29,7 +31,7 @@ import pack_sport from '../assets/models/pack_sport.glb';
 import pack_suv from '../assets/models/pack_suv.glb';
 import pack_wagon from '../assets/models/pack_wagon.glb';
 
-const SOURCES = { 'gt3rs:hi': gt3Hi, 'gt3rs:lo': gt3Lo, 'cybertruck:hi': cyberHi, 'cybertruck:lo': cyberLo, 'vito:hi': vitoHi, 'vito:lo': vitoLo, 'mini:hi': miniHi, 'mini:lo': miniLo, 'ferrari:hi': ferrariHi, 'ferrari:lo': ferrariLo, 'concept:hi': conceptHi, 'concept:lo': conceptLo, 'compact:hi': pack_compact, 'coupe:hi': pack_coupe, 'hatchback:hi': pack_hatchback, 'minivan:hi': pack_minivan, 'offroad:hi': pack_offroad, 'pickup:hi': pack_pickup, 'sedan:hi': pack_sedan, 'sport:hi': pack_sport, 'suv:hi': pack_suv, 'wagon:hi': pack_wagon };
+const SOURCES = { 'gt3rs:hi': gt3Hi, 'gt3rs:lo': gt3Lo, 'cybertruck:hi': cyberHi, 'cybertruck:lo': cyberLo, 'vito:hi': vitoHi, 'vito:lo': vitoLo, 'mini:hi': miniHi, 'mini:lo': miniLo, 'corolla:hi': corollaHi, 'corolla:lo': corollaLo, 'ferrari:hi': ferrariHi, 'ferrari:lo': ferrariLo, 'concept:hi': conceptHi, 'concept:lo': conceptLo, 'compact:hi': pack_compact, 'coupe:hi': pack_coupe, 'hatchback:hi': pack_hatchback, 'minivan:hi': pack_minivan, 'offroad:hi': pack_offroad, 'pickup:hi': pack_pickup, 'sedan:hi': pack_sedan, 'sport:hi': pack_sport, 'suv:hi': pack_suv, 'wagon:hi': pack_wagon };
 // Per-model node/material mapping. rotY: radians to turn the model so its nose points +Z (game forward).
 // "Generic passenger car pack" (CC BY, Comrade1280): pre-split + oriented by tools/splitpack.mjs; keeps its own baked textures (no repaint).
 const PACK_DEF = { rotY: 0, wheelNode: /^wheel_(fl|fr|rl|rr)$/, frontWheel: /^wheel_f/, steer: null, paintMat: null, glassMat: /^Glass/, tailMat: null, headMat: null, keepTextures: true };
@@ -43,6 +45,9 @@ export const MODEL_DEFS = {
   vito: { rotY: 0, wheelNode: /^wheel_(fl|fr|rl|rr)$/, frontWheel: /^wheel_f/, tireMesh: /tire/i, steer: /^steering_wheel$/, paintMat: null, glassMat: /^glass/i, tailMat: /^tailights$/, headMat: null, keepTextures: true },
   // Mini Cooper S (シRuletăシ, CC BY), prepared by tools/prepmini.mjs: metres, nose +Z, wheels regrouped. Keeps its own textures.
   mini: { rotY: 0, wheelNode: /^wheel_(fl|fr|rl|rr)$/, frontWheel: /^wheel_f/, tireMesh: /llanta|COOPER__rin/i, steer: null, paintMat: null, glassMat: /^vidrios$/i, tailMat: /^COOPER_luz2$/, headMat: /^COOPER_luz$/, keepTextures: true },
+  // Toyota Corolla 2020 (ItsDiyor, CC BY), prepared by tools/prepcorolla.mjs: metres, nose +Z, wheels split out of the
+  // fused source meshes. Body uses a real paint material -> game paint shader (colours / damage); rest keeps textures.
+  corolla: { rotY: 0, wheelNode: /^wheel_(fl|fr|rl|rr)$/, frontWheel: /^wheel_f/, tireMesh: null, steer: null, paintMat: /^Paint_Color$/, glassMat: /^Index_0_2$/, tailMat: null, headMat: null, keepTextures: true },
   compact: PACK_DEF,
   coupe: PACK_DEF,
   hatchback: PACK_DEF,

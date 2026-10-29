@@ -63,6 +63,7 @@ GLB_MODELS.gt3rs = { model: 'gt3rs', auto: true, hud: 0xd8d018 };
 GLB_MODELS.cybertruck = { model: 'cybertruck', auto: true, hud: 0xb8bcc2, eye: { x: 0.36, y: 1.52, z: 0.85 }, hoodEye: { x: 0, y: 1.15, z: 2.15 } };
 GLB_MODELS.vito = { model: 'vito', auto: true, hud: 0xf2f2f2, eye: { x: 0.45, y: 1.36, z: 0.62 }, hoodEye: { x: 0, y: 1.12, z: 2.00 } };
 GLB_MODELS.mini = { model: 'mini', auto: true, hud: 0xc8102e };
+GLB_MODELS.corolla = { model: 'corolla', auto: true, hud: 0xc8ccd2 };
 for (const id of ['compact', 'coupe', 'hatchback', 'minivan', 'offroad', 'pickup', 'sedan', 'sport', 'suv', 'wagon']) GLB_MODELS[id] = { model: id, auto: true, hud: { compact: 0x4cc0e0, coupe: 0x2030c0, hatchback: 0xe8d040, minivan: 0x801818, offroad: 0x2a4a20, pickup: 0x1a6a2a, sedan: 0xb0a040, sport: 0xc81818, suv: 0x202020, wagon: 0x4a90a0 }[id] };
 
 function bodyShape(p) {

@@ -43,6 +43,12 @@
 - Licensed under **Creative Commons Attribution 4.0 (CC BY 4.0)**: https://creativecommons.org/licenses/by/4.0/ . Commercial use allowed with credit.
 - Changes: split into one file per car, units converted, oriented/centred, wheels separated for spinning/steering, textures resized (512–1024 px WebP), meshopt-compressed. Source: `assets/source/carpack.glb`; pipeline: `tools/splitpack.mjs` then `tools/optimize.mjs`.
 
+## Toyota Corolla 2020 (`assets/models/corolla_hi.glb` / `corolla_lo.glb`)
+- "Toyota Corolla 2020" by **ItsDiyor** on Sketchfab: https://sketchfab.com/3d-models/toyota-corolla-2020-6d7d34ee42734d1ab28a6b1f1c5fc4fc
+- Licensed under **Creative Commons Attribution (CC BY 4.0)**: https://creativecommons.org/licenses/by/4.0/ . Commercial use allowed with credit.
+- Changes: scaled to 4.63 m, tyres/rims/brakes split out of the fused body meshes into four wheel nodes, geometry simplified (hi ~150k / lo ~75k triangles), textures resized (1024 / 512 px WebP), meshopt-compressed; body paint replaced by the game's paint shader. Source (not committed): `assets/source/corolla_src.glb`; pipeline: `node tools/prepcorolla.mjs assets/source/corolla_src.glb assets/models/corolla_hi.glb hi` (and `... _lo.glb lo`).
+- **Toyota and Corolla are trademarks of Toyota Motor Corporation; verify trademark situation before any public/commercial release** (same caveat as the Ferrari, Cybertruck and Porsche).
+
 ## Engine sound recordings (`assets/audio/engine/*.wav`, built by `tools/prepEngineSamples.py`)
 Short steady-RPM loops cut from these Wikimedia Commons recordings, all licensed **CC BY 3.0** (https://creativecommons.org/licenses/by/3.0/). Changes: mono 22.05 kHz, 0.5 s excerpts, loudness-normalised, crossfaded into seamless loops; pitch-shifted by RPM at runtime.
 - Viper (V10): "Dodge Viper GTS - engine and exhaust sound" by **Erwin Lindsen** — https://commons.wikimedia.org/wiki/File:Dodge_Viper_GTS_-_engine_and_exhaust_sound_(YouTube_tfZiZqQQBOE).opus and https://commons.wikimedia.org/wiki/File:Dodge_Viper_GTS_-_engine_and_exhaust_sound_(YouTube_Kcy6fjTiun8).opus

@@ -18,6 +18,7 @@ export const PLAYER_CARS = [
   { id: 'gt3rs', name: 'GT3 RS', kind: 'super', cg: 0.44, model: 'gt3rs', top: 92, accel: 18, grip: 10.2, steer: 1.08, mass: 0.95, armor: 0.85, color: 0xd8d018, color2: 0x111111, livery: 'plain', desc: 'Track-bred rear-engine weapon' },
   { id: 'vito', name: 'VITO VAN', kind: 'suv', cg: 0.78, model: 'vito', top: 72, accel: 12.5, grip: 7.4, steer: 0.78, mass: 2.1, armor: 1.7, color: 0xf2f2f2, color2: 0x111111, livery: 'plain', desc: 'Workhorse utility van' },
   { id: 'mini', name: 'MINI COOPER S', kind: 'sedan', cg: 0.5, model: 'mini', top: 78, accel: 16.5, grip: 9.4, steer: 1.18, mass: 0.85, armor: 0.75, color: 0xc8102e, color2: 0x111111, livery: 'plain', desc: 'Pocket rocket hatch' },
+  { id: 'corolla', name: 'COROLLA 2020', kind: 'sedan', cg: 0.52, model: 'corolla', top: 66, accel: 13.5, grip: 8.6, steer: 1.02, mass: 1.0, armor: 1.0, color: 0xc8ccd2, color2: 0x111111, livery: 'plain', desc: 'Everyday hero sedan' },
 ];
 export const RACER_COLORS = [[0x1ec8ff, 0x101010], [0x9aff1e, 0x101010], [0xffd400, 0x101010], [0xa020ff, 0xffffff], [0xffffff, 0xff2050], [0x202020, 0xff6a00]];
 // Traffic uses the "Generic passenger car pack" models with their own baked textures (no recolour). `w` = spawn weight.
