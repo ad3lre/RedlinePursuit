@@ -1,6 +1,7 @@
 // ===== Multi-layer engine synthesizer driven by real per-car profiles =====
 import { clamp } from './util.js';
 import { resolveEngine, firingHz, absRpm } from './engineProfiles.js';
+import { EngineSampler, hasBank } from './engineSamples.js';
 
 function makeCurve(fn, n = 1024) {
   const c = new Float32Array(n);
@@ -104,6 +105,15 @@ export function buildEngine(ctx, noiseSrc, sfxBus) {
   e.evWhine = mk('triangle', 900); e.evWhineF = bp(1400, 5); e.evWhineG = ctx.createGain(); e.evWhineG.gain.value = 0;
   e.evWhine.connect(e.evWhineF); e.evWhineF.connect(e.evWhineG); e.evWhineG.connect(sfxBus);
 
+  // Recorded real-engine layer (RPM sample bank), mixed post-synth so cabin filter / shift cuts apply to it too
+  e.sampler = new EngineSampler(ctx);
+  e.sampler.out.connect(e.cabinLP);
+  e.synthMix = ctx.createGain(); e.synthMix.gain.value = 1;
+  // re-route the synth combustion stack through synthMix so it can be lowered when recordings are available
+  e.shaper.disconnect();
+  e.shaper.connect(e.synthMix);
+  e.synthMix.connect(e.filter); e.synthMix.connect(e.resA); e.synthMix.connect(e.resB); e.synthMix.connect(e.resC);
+
   e.spool = 0;
   e.prId = null;
 
@@ -142,6 +152,7 @@ export function updateEngine(e, dt, st, now, hooks) {
   if (e.prId !== (st.carId || st.kind)) {
     e.prId = st.carId || st.kind;
     applyProfileStatic(e, pr, now);
+    e.sampler.setCar(hasBank(st.carId) ? st.carId : null);
   }
 
   const rpmN = clamp(st.rpm ?? 0.2, 0.0, 1.08);
@@ -211,6 +222,18 @@ export function updateEngine(e, dt, st, now, hooks) {
   e.resC.Q.setTargetAtTime(pr.qC, now, 0.1);
   e.filter.frequency.setTargetAtTime(260 + thr * 2200 + effN * 2300 + (st.nitro ? 900 : 0), now, 0.045);
   e.cabinLP.frequency.setTargetAtTime(fp ? 3400 + thr * 1400 : 7200, now, 0.08);
+
+  // Real recording carries the engine's character; the synth stays underneath for body, and takes over above the
+  // highest recorded RPM (where pitch-shifting a recording would sound artificial).
+  const smp = e.sampler;
+  if (smp.ready && !isEv) {
+    const over = smp.overTop(rpmAbs);
+    smp.update(rpmAbs, thr, on * (1 - 0.55 * over) * 2.4, now);
+    e.synthMix.gain.setTargetAtTime(0.28 + 0.6 * over, now, 0.08);
+  } else {
+    smp.update(rpmAbs, thr, 0, now);
+    e.synthMix.gain.setTargetAtTime(1, now, 0.08);
+  }
 
   const cutMult = hooks.shiftCut > 0 && hooks.shiftDir > 0 ? 0.18 : 1.0;
   const engGain = on * cutMult * pr.body * (0.12 + thr * 0.13 + effN * 0.08 + (st.nitro ? 0.04 : 0));

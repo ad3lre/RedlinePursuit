@@ -43,6 +43,15 @@
 - Licensed under **Creative Commons Attribution 4.0 (CC BY 4.0)**: https://creativecommons.org/licenses/by/4.0/ . Commercial use allowed with credit.
 - Changes: split into one file per car, units converted, oriented/centred, wheels separated for spinning/steering, textures resized (512–1024 px WebP), meshopt-compressed. Source: `assets/source/carpack.glb`; pipeline: `tools/splitpack.mjs` then `tools/optimize.mjs`.
 
+## Engine sound recordings (`assets/audio/engine/*.wav`, built by `tools/prepEngineSamples.py`)
+Short steady-RPM loops cut from these Wikimedia Commons recordings, all licensed **CC BY 3.0** (https://creativecommons.org/licenses/by/3.0/). Changes: mono 22.05 kHz, 0.5 s excerpts, loudness-normalised, crossfaded into seamless loops; pitch-shifted by RPM at runtime.
+- Viper (V10): "Dodge Viper GTS - engine and exhaust sound" by **Erwin Lindsen** — https://commons.wikimedia.org/wiki/File:Dodge_Viper_GTS_-_engine_and_exhaust_sound_(YouTube_tfZiZqQQBOE).opus and https://commons.wikimedia.org/wiki/File:Dodge_Viper_GTS_-_engine_and_exhaust_sound_(YouTube_Kcy6fjTiun8).opus
+- Kaiser (turbo I6): "BMW M2 Competition with Remus exhaust - engine and exhaust sound" by **PointShiftDrive** — https://commons.wikimedia.org/wiki/File:BMW_M2_Competition_with_Remus_exhaust_-_engine_and_exhaust_sound_(YouTube_51_uOnGip4w).opus
+- Bruiser (V8): "Ford Mustang GT (S550) - engine and exhaust sound" by **Cestni dirkač** — https://commons.wikimedia.org/wiki/File:Ford_Mustang_GT_(S550)_-_engine_and_exhaust_sound_(YouTube_2ceiDjGgpI8).opus
+- GT3 RS (flat-6): "Porsche 911 GT3 RS (991) - engine and exhaust sound" by **Automotion Media** — https://commons.wikimedia.org/wiki/File:Porsche_911_GT3_RS_(991)_-_engine_and_exhaust_sound_(YouTube_otznJ2rBoks).opus
+- Mini (turbo I4, stand-in: no Mini recording available): "Volkswagen Golf GTI - engine and exhaust sound" by **9000 Giri • Elaborazioni Auto Sportive** — https://commons.wikimedia.org/wiki/File:Volkswagen_Golf_GTI_-_engine_and_exhaust_sound_(YouTube_NrA1GgbjFRg).opus
+- Vito (diesel I4, stand-in: no Vito recording available): "Volkswagen Passat B5 1.9 TDI (remapped, 185 hp) - engine and exhaust sound" by **tomeko0o3769** — https://commons.wikimedia.org/wiki/File:Volkswagen_Passat_B5_1.9_TDI_(remapped,_185_hp)_-_engine_and_exhaust_sound_(YouTube_12P7SQ_48k4).opus
+
 ## Environment assets (Poly Haven, CC0 / public domain, no attribution required; listed for reference)
 - pine_tree_01 (bark + needle textures), jacaranda_tree (bark + leaf textures), boulder_01, rock_09, street_lamp_01 (Josh Dean), metal_trash_can, concrete_road_barrier: https://polyhaven.com
 - Changes: scan meshes decimated to ~0.3-2k triangles, textures resized to 128-512 px WebP; tree crowns are procedurally generated alpha-card foliage using the original textures. Sources are not committed (assets/env_src, 1.3 GB); fetch with `node tools/phdl.mjs <id>` and rebuild with `tools/envopt.mjs` / `tools/envcards.mjs`.

@@ -1,0 +1,119 @@
+{
+ "viper": [
+  {
+   "file": "viper_0.wav",
+   "rpm": 720,
+   "f0": 60.0
+  },
+  {
+   "file": "viper_1.wav",
+   "rpm": 1155,
+   "f0": 96.2
+  },
+  {
+   "file": "viper_2.wav",
+   "rpm": 2265,
+   "f0": 188.8
+  }
+ ],
+ "kaiser": [
+  {
+   "file": "kaiser_0.wav",
+   "rpm": 1225,
+   "f0": 61.2
+  },
+  {
+   "file": "kaiser_1.wav",
+   "rpm": 2175,
+   "f0": 108.8
+  },
+  {
+   "file": "kaiser_2.wav",
+   "rpm": 3150,
+   "f0": 157.5
+  },
+  {
+   "file": "kaiser_3.wav",
+   "rpm": 3725,
+   "f0": 186.2
+  }
+ ],
+ "bruiser": [
+  {
+   "file": "bruiser_0.wav",
+   "rpm": 750,
+   "f0": 50.0
+  },
+  {
+   "file": "bruiser_1.wav",
+   "rpm": 2231,
+   "f0": 148.8
+  },
+  {
+   "file": "bruiser_2.wav",
+   "rpm": 3825,
+   "f0": 255.0
+  }
+ ],
+ "gt3rs": [
+  {
+   "file": "gt3rs_0.wav",
+   "rpm": 1025,
+   "f0": 51.2
+  },
+  {
+   "file": "gt3rs_1.wav",
+   "rpm": 3975,
+   "f0": 198.8
+  },
+  {
+   "file": "gt3rs_2.wav",
+   "rpm": 6525,
+   "f0": 326.2
+  },
+  {
+   "file": "gt3rs_3.wav",
+   "rpm": 8400,
+   "f0": 420.0
+  }
+ ],
+ "mini": [
+  {
+   "file": "mini_0.wav",
+   "rpm": 1312,
+   "f0": 43.8
+  },
+  {
+   "file": "mini_1.wav",
+   "rpm": 1875,
+   "f0": 62.5
+  },
+  {
+   "file": "mini_2.wav",
+   "rpm": 3150,
+   "f0": 105.0
+  },
+  {
+   "file": "mini_3.wav",
+   "rpm": 3938,
+   "f0": 131.2
+  }
+ ],
+ "vito": [
+  {
+   "file": "vito_0.wav",
+   "rpm": 1912,
+   "f0": 63.8
+  },
+  {
+   "file": "vito_1.wav",
+   "rpm": 2325,
+   "f0": 77.5
+  },
+  {
+   "file": "vito_2.wav",
+   "rpm": 2700,
+   "f0": 90.0
+  }
+ ]
+}
