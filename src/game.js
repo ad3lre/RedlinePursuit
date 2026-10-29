@@ -412,20 +412,54 @@ export class Game {
       const f = (c.wrecked ? 1 : 0) | (c.nitroActive ? 2 : 0) | ((pl ? this.playerFinished : c.ai?.finished) ? 4 : 0) | (c.input.handbrake ? 8 : 0) | (c.input.nitro ? 16 : 0) | (pl && this.spectating ? 32 : 0);
       return [c.net.id, r(c.pos.x), r(c.pos.y), r(c.pos.z), r(c.yaw, 1000), r(c.vel.x), r(c.vel.y), r(c.angVel, 1000), r(c.health, 1000), f, Math.round(prog), r(c.input.steer), r(c.input.throttle), r(c.input.brake), r(c.nitro)];
     });
-    M.net.send({ t: 's', cars });
+    // sid: session the sender is in (receivers drop snapshots from another session);
+    // me: sender's identity so clients that never heard about this player (late join) can spawn its car
+    const pl = this.player;
+    M.net.send({ t: 's', sid: this.sid, me: [M.myId, pl.name, this.carIdx, pl.police ? 'cop' : 'racer'], cars });
+  }
+  // a snapshot arrived from a player this client has no car for (joined late via a bot handover, or the 'assign'
+  // never reached us): build their car on the spot instead of silently ignoring them forever
+  spawnRemote(id, name, carIdx, role) {
+    if (this.netCars.has(id) || id === this.multi.myId) return this.netCars.get(id);
+    const isCop = role === 'cop';
+    const spec = PLAYER_CARS[(carIdx | 0) % PLAYER_CARS.length];
+    const c = this.addCar(isCop ? { ...spec, armor: spec.armor * 1.3 } : spec, { role: isCop ? 'cop' : 'racer', police: isCop, name: name || 'RACER', color: spec.color, color2: spec.color2, livery: spec.livery });
+    c.net = { id, owner: id, human: true };
+    c.ai = new RemoteAI(c);
+    c.nitro = isCop ? 1 : 0.6;
+    if (isCop) { c.sirenOn = true; this.cops.push(c); } else this.racers.push(c);
+    this.netCars.set(id, c);
+    this.expectedRacers = Math.max(this.expectedRacers || 0, this.racers.length);
+    this.notify('PLAYER JOINED', c.name, '#3aff90');
+    return c;
+  }
+  dropNetCar(id) {
+    const c = this.netCars.get(id); if (!c) return;
+    this.netCars.delete(id);
+    this.racers = this.racers.filter((x) => x !== c); this.cops = this.cops.filter((x) => x !== c);
+    this.removeCar(c);
   }
   onNet(m) {
     if (!this.multi) return;
     if (m.t === 'joinreq' && this.multi.host === this.multi.myId) return this.assignBot(m);
+    if (m.t === 'taken') { this.dropNetCar(m.bot); return; }
     if (m.t === 's') {
+      if (m.sid != null && this.sid != null && m.sid !== this.sid) return; // stale/other session: never mix realities
+      if (Array.isArray(m.me) && m.me[0] === m.from && this.state !== 'idle') {
+        const own = (m.cars || []).some((a) => a[0] === m.from);
+        if (own && !this.netCars.has(m.from)) this.spawnRemote(m.me[0], m.me[1], m.me[2], m.me[3]);
+      }
       for (const a of m.cars || []) {
-        const c = this.netCars.get(a[0]);
+        let c = this.netCars.get(a[0]);
+        // bot ids are host-scoped: only accept bot snapshots from whoever actually simulates them
+        if (c && c.net.bot && m.from && c.net.owner !== m.from) c.net.owner = m.from;
         if (!c || !(c.ai instanceof RemoteAI)) continue;
         c.ai.snap = { x: a[1], y: a[2], z: a[3], yaw: a[4], vx: a[5], vz: a[6], av: a[7], h: a[8], f: a[9], st: a[11], th: a[12], br: a[13] };
         c.ai.age = 0; c.ai.progress = a[10];
         c.health = a[8]; c.nitro = a[14] ?? c.nitro; c.out = !!(a[9] & 32);
         if (a[9] & 4 && !c.ai.finished && this.route) { c.ai.finished = true; this.finished.push(c); }
         if (!(a[9] & 1) && c.wrecked) { c.wrecked = false; c.sirenOn = undefined; }
+        else if (a[9] & 1 && !c.wrecked) { c.wrecked = true; c.wreckTime = this.time; c.health = 0; } // missed the 'wreck' event: converge anyway
       }
     } else if (m.t === 'wreck') {
       const c = this.netCars.get(m.id);
@@ -462,10 +496,8 @@ export class Game {
       if (!this.escSeen?.has(m.id)) { (this.escSeen ||= new Set()).add(m.id); this.escapedRacers++; this.notify('RACER ESCAPED', `${m.name || 'Racer'} got away`, '#ff6040'); }
     } else if (m.t === 'gone') {
       for (const [id, c] of [...this.netCars]) {
-        if (c.net.owner !== m.from) continue;
-        this.netCars.delete(id);
-        this.racers = this.racers.filter((x) => x !== c);
-        this.removeCar(c);
+        if (c.net.owner !== m.from && id !== m.from) continue;
+        this.dropNetCar(id);
         if (c.net.human) this.notify('PLAYER LEFT', c.name, '#aaaaaa');
       }
     }
@@ -477,8 +509,9 @@ export class Game {
     bot.net.taken = m.from;
     const progress = bot.ai?.progress || 0;
     this.multi.net.send({ t: 'assign', to: m.from, event: this.multi.event, map: this.world.mapId, sid: this.sid, host: this.multi.myId, players: [{ id: m.from, name: m.name, role: m.role, car: m.car, slot: 0 }], spawn: { x: bot.pos.x, z: bot.pos.z, yaw: bot.yaw, speed: bot.speed, progress }, takeBot: bot.net.id });
-    // that bot disappears here: the new player's own car (streamed from their client) replaces it
-    this.netCars.delete(bot.net.id); this.racers = this.racers.filter((x) => x !== bot); this.removeCar(bot);
+    // that bot disappears here (the relay tells every other client via 'taken'); the new player's own car,
+    // streamed from their client, replaces it everywhere — other clients spawn it from its first snapshot
+    this.dropNetCar(bot.net.id);
   }
   netSmooth(dt) {
     const k = 1 - Math.exp(-dt * 9);

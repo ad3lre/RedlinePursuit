@@ -20,7 +20,7 @@ const MAPS = new Set(['coast', 'tokyo', 'stuttgart']);
 let nextId = 1;
 
 const clean = (s) => String(s || '').replace(/[^\w \-.!?]/g, '').trim().slice(0, 14) || 'RACER';
-const send = (ws, m) => { if (ws.readyState === 1) ws.send(typeof m === 'string' ? m : JSON.stringify(m)); };
+const send = (ws, m) => { if (ws && ws.readyState === 1) ws.send(typeof m === 'string' ? m : JSON.stringify(m)); };
 const all = (m, except) => { const s = JSON.stringify(m); for (const p of players.values()) if (p.id !== except) send(p.ws, s); };
 
 // owner = first connected player; if the owner is idling in the menu, the earliest ready/playing player runs things
@@ -36,20 +36,33 @@ function hostId() {
   return first;
 }
 function room() {
-  all({ t: 'room', host: hostId(), session: { running: session.running, event: session.event, map: session.map }, players: [...players.values()].map((p) => ({ id: p.id, name: p.name, state: p.state, role: p.role, car: p.car, mode: p.mode })) });
+  all({ t: 'room', host: hostId(), session: { running: session.running, event: session.event, map: session.map, sid: session.sid, host: session.host }, players: [...players.values()].map((p) => ({ id: p.id, name: p.name, state: p.state, role: p.role, car: p.car, mode: p.mode, away: !p.ws })) });
 }
 function checkIdle() { if (![...players.values()].some((p) => p.state === 'playing')) session.running = false; }
+// who answers join requests for the running session: the host that launched it (it simulates the bots), else any player still in it
+function sessionHost() {
+  const h = players.get(session.host);
+  if (h && h.ws && h.state === 'playing') return h;
+  for (const p of players.values()) if (p.ws && p.state === 'playing') return p;
+  return null;
+}
+const GRACE_MS = 20000; // a playing client that drops keeps its slot this long so it can resume without a split
+function drop(p) {
+  if (!players.has(p.id)) return;
+  if (hostOverride === p.id) hostOverride = null;
+  players.delete(p.id); all({ t: 'gone', from: p.id }); checkIdle(); room();
+}
 
 const server = http.createServer((req, res) => { res.writeHead(200, { 'content-type': 'text/plain' }); res.end(`chase relay ok — ${players.size} online, session ${session.running ? 'running' : 'idle'}\n`); });
 const wss = new WebSocketServer({ server, maxPayload: 128 * 1024 });
 
 wss.on('connection', (ws) => {
   if (players.size >= MAX * 2) { ws.close(1013, 'full'); return; }
-  const me = { id: 'p' + nextId++, ws, name: 'RACER', state: 'menu', role: 'racer', car: 0, mode: 'race' };
+  let me = { id: 'p' + nextId++, ws, token: Math.random().toString(36).slice(2) + Date.now().toString(36), name: 'RACER', state: 'menu', role: 'racer', car: 0, mode: 'race' };
   players.set(me.id, me);
   ws.alive = true;
   ws.on('pong', () => (ws.alive = true));
-  send(ws, { t: 'welcome', id: me.id });
+  send(ws, { t: 'welcome', id: me.id, token: me.token, sid: session.sid });
   room();
   ws.on('message', (buf) => {
     let m; try { m = JSON.parse(buf); } catch { return; }
@@ -57,19 +70,37 @@ wss.on('connection', (ws) => {
     if (RELAY.has(m.t)) {
       m.from = me.id;
       if (m.t === 'dmg' && m.to) { const p = players.get(m.to); if (p) send(p.ws, m); return; }
-      if (m.t === 'assign') { const p = players.get(m.to); if (p) { p.state = 'playing'; send(p.ws, m); room(); } return; }
+      if (m.t === 'assign') {
+        const p = players.get(m.to);
+        if (p) { p.state = 'playing'; send(p.ws, m); room(); }
+        // tell everyone else in the session which bot was handed over, so nobody keeps a frozen copy of it
+        if (m.takeBot) all({ t: 'taken', bot: m.takeBot, by: m.to, from: me.id }, me.id);
+        return;
+      }
       const s = JSON.stringify(m);
       for (const p of players.values()) if (p.id !== me.id && p.state === 'playing') send(p.ws, s);
       return;
     }
     switch (m.t) {
+      case 'resume': {
+        // reconnect after a drop: re-attach this socket to the old player record (same id, same slot, same session)
+        const old = players.get(m.id);
+        if (!old || old === me || old.token !== m.token) { send(ws, { t: 'resume', ok: false, id: me.id, token: me.token }); break; }
+        clearTimeout(old.graceT); old.graceT = null;
+        if (old.ws && old.ws !== ws) { try { old.ws.terminate(); } catch { /* */ } }
+        players.delete(me.id);
+        old.ws = ws; me = old;
+        send(ws, { t: 'resume', ok: true, id: me.id, token: me.token, sid: session.sid, running: session.running, state: me.state });
+        room();
+        break;
+      }
       case 'hello': me.name = clean(m.name); room(); break;
       case 'ready': {
         me.name = clean(m.name || me.name); me.role = m.role === 'cop' ? 'cop' : 'racer'; me.car = clampCar(m.car); me.mode = ['race', 'cop', 'free'].includes(m.mode) ? m.mode : 'race';
         me.map = MAPS.has(m.map) ? m.map : 'coast';
         me.state = 'ready';
-        const h = players.get(hostId());
-        if (session.running && h && h.id !== me.id && h.state === 'playing') send(h.ws, { t: 'joinreq', from: me.id, name: me.name, role: me.role, car: me.car });
+        const h = session.running ? sessionHost() : null;
+        if (h && h.id !== me.id) send(h.ws, { t: 'joinreq', from: me.id, name: me.name, role: me.role, car: me.car });
         room();
         break;
       }
@@ -78,7 +109,7 @@ wss.on('connection', (ws) => {
         if (hostId() !== me.id) return;
         const parts = [...players.values()].filter((p) => p.state !== 'menu');
         if (!parts.length) return;
-        session = { running: true, event: me.mode === 'free' ? 'free' : 'race', sid: session.sid + 1, map: me.map || 'coast' };
+        session = { running: true, event: me.mode === 'free' ? 'free' : 'race', sid: session.sid + 1, map: me.map || 'coast', host: me.id };
         let r = 0, c = 0;
         const list = parts.map((p) => ({ id: p.id, name: p.name, role: p.role, car: p.car, slot: p.role === 'cop' ? c++ : r++ }));
         const msg = { t: 'start', event: session.event, map: session.map, sid: session.sid, host: me.id, players: list };
@@ -97,7 +128,16 @@ wss.on('connection', (ws) => {
       case 'ping': send(ws, { t: 'pong', c: m.c }); break;
     }
   });
-  ws.on('close', () => { if (hostOverride === me.id) hostOverride = null; players.delete(me.id); all({ t: 'gone', from: me.id }); checkIdle(); room(); });
+  ws.on('close', () => {
+    if (me.ws !== ws) return; // this socket was superseded by a resume
+    me.ws = null;
+    if (me.state === 'playing' && session.running) {
+      // keep the slot: others keep seeing the car (frozen-extrapolated) until resume or grace expiry
+      const p = me;
+      p.graceT = setTimeout(() => { if (!p.ws) drop(p); }, GRACE_MS);
+      room();
+    } else drop(me);
+  });
   ws.on('error', () => {});
 });
 

@@ -504,6 +504,9 @@ function garageSpin(dt) {
 }
 function startGame() {
   if (net.connected && room) { audio.click(); if (!waiting) { waiting = true; sendReady(); } refreshWait(); return; }
+  // was online before but the socket is down right now: wait for the reconnect instead of silently starting a
+  // separate solo world (players thought they were together but were each in their own game)
+  if (net._everOpened) { audio.click(); waiting = true; setWait('Reconnecting to the room…'); net.connect().then(() => { net.send({ t: 'hello', name: mpName }); if (waiting) { sendReady(); refreshWait(); } }).catch(() => {}); return; }
   startLocal();
 }
 async function startLocal() {
@@ -664,6 +667,7 @@ $('btn-res-menu').onclick = () => backToMenu();
 // Everyone is in one room. The menu / garage / car picking are the normal single-player screens: START there = "ready".
 // The room owner launches the session with GO (button or G). Until then ready players see "N players ready".
 const net = new Net();
+window.__net = net; // debug / test hook
 // Player name: typed on the main menu, kept in localStorage, sent to the relay (which applies the same character rules and 14-char cap).
 const cleanName = (s) => String(s || '').replace(/[^\w \-.!?]/g, '').replace(/\s+/g, ' ').trim().slice(0, 14);
 const defaultName = 'RACER' + Math.floor(Math.random() * 900 + 100);
@@ -699,11 +703,21 @@ async function netConnect() {
   try { await net.connect(); net.send({ t: 'hello', name: mpName }); } catch (e) { /* offline: single player still works, START falls back to a local game */ }
 }
 function sendReady() { commitName(); sentReady = true; net.send({ t: 'ready', name: mpName, mode: selMode, role: roleFor(selMode), car: selCar, map: world.mapId }); }
-function leaveRoom() { waiting = false; sentReady = false; net.send({ t: 'menu' }); refreshWait(); }
+function leaveRoom() { waiting = false; sentReady = false; net.inSession = false; net.send({ t: 'menu' }); refreshWait(); }
 function goNow() { if (waiting && isOwner()) net.send({ t: 'go' }); }
 net.on((m) => {
   if (m.t === 'room') { room = m; if (app === 'garage' || waiting) refreshWait(); }
-  else if (m.t === 'closed') { room = null; if (waiting) { waiting = false; setWait('Disconnected — starting a local game'); startLocal(); } }
+  else if (m.t === 'reopened') { net.send({ t: 'hello', name: mpName }); if (waiting) sendReady(); }
+  else if (m.t === 'netstatus') {
+    if (!game || !game.multi) return;
+    if (m.state === 'reconnecting') game.notify('CONNECTION', 'Reconnecting…', '#ffb400', true);
+    else if (m.state === 'resumed') {
+      // back in the same slot. If the session we were in has ended / been replaced meanwhile, don't keep driving a ghost world.
+      if (!m.running || (m.sid != null && game.sid != null && m.sid !== game.sid)) { game.notify('SESSION ENDED', 'The session ended while you were offline', '#ff6040', true); game.multi.net = null; net.inSession = false; }
+      else game.notify('CONNECTION', 'Reconnected', '#3aff90');
+    } else if (m.state === 'expired') { game.notify('DISCONNECTED', 'Lost your slot — back to the menu to rejoin', '#ff4040', true); game.multi.net = null; net.inSession = false; }
+  }
+  else if (m.t === 'closed') { room = null; if (game && game.multi) { game.notify('DISCONNECTED', 'Multiplayer server unreachable', '#ff4040', true); game.multi.net = null; net.inSession = false; } if (waiting) { setWait('Connection lost — reconnecting…'); } }
   else if (m.t === 'claim') { if (m.ok) { game && game.notify('HOST', 'You are now the room host', '#3aff90', true); refreshWait(); } else alert(m.msg || 'Wrong password'); }
   else if (m.t === 'start') beginSession(m);
   else if (m.t === 'assign') beginSession(m, true);
@@ -720,6 +734,7 @@ async function beginSession(m, late = false) {
   const mode = m.event === 'free' ? 'free' : (me && me.role === 'cop' ? 'cop' : 'race');
   selMode = mode; selCar = me ? me.car : selCar;
   game.start(mode, selCar, { myId: net.id, host: m.host, players: m.players, event: m.event, sid: m.sid, net, late: late ? m : null });
+  net.inSession = true;
   rig.setMode(settings.camMode || 0); hud.camLabel(CAM_MODES[rig.modeIndex].label);
   const n = m.players.length;
   game.notify('ONLINE', `${n} player${n > 1 ? 's' : ''} in the session`, '#ff3aa0', true);
