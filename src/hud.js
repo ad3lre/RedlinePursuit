@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { clamp } from './util.js';
 import { fmtTime } from './game.js';
 import { WORLD_HALF } from './terrain.js';
+import { pointAtDist } from './roads.js';
 import { MS_TO_KMH, MS2_TO_G, fmtDistance } from './units.js';
 
 const $ = (id) => document.getElementById(id);
@@ -122,7 +123,7 @@ export class HUD {
       arrow.style.transform = `translateX(-50%) rotate(${-a}rad)`;
       $('arrow-d').textContent = `${Math.round(Math.hypot(dx, dz))} m`;
     } else arrow.classList.add('hidden');
-    this.drawMinimap(g, world);
+    this.drawMinimap(g, world, dt);
     this.updateMarkers(g, camera);
   }
 
@@ -219,76 +220,192 @@ export class HUD {
     c.fillStyle = hcol; c.fillText('DAMAGE', cx + 70, cy - 36);
   }
 
-  drawMinimap(g, world) {
-    const c = this.mini, S = 240, R = S / 2;
-    const pl = g.player;
+  // ---------------- Minimap ----------------
+  // Heading-up radar. The view is centred *ahead* of the car (you care about what's coming, not what's behind) and
+  // zooms smoothly with speed; Z cycles zoom presets (auto / near / far). Everything that matters but is outside the
+  // circle (next checkpoint, racers, chasing cops, finish) is pinned to the rim with a distance tag.
+  drawMinimap(g, world, dt = 1 / 60) {
+    const c = this.mini, S = 240, R = S / 2, RIN = R - 6;
+    const pl = g.player; if (!pl || !world.minimapCanvas) return;
+    const now = performance.now();
+    const blink = (now / 250) % 2 < 1;
+    const zoomMul = [1, 0.55, 2.2][this.mapZoom || 0];
+    // ---- smooth zoom / look-ahead (no frame-to-frame pumping) ----
+    const targetRange = (190 + clamp(pl.speed * 3.2, 0, 260)) * zoomMul; // metres from centre to rim
+    this._mmRange = this._mmRange ? this._mmRange + (targetRange - this._mmRange) * Math.min(1, dt * 2.5) : targetRange;
+    const range = this._mmRange, scale = RIN / range; // px per metre
+    const ahead = RIN * 0.28; // player sits below centre -> ~64% of the map shows the road ahead
+    const rot = Math.PI + pl.yaw; // heading up
+    const cosR = Math.cos(rot), sinR = Math.sin(rot);
+    // world -> screen
+    const toS = (x, z) => {
+      const dx = (x - pl.pos.x) * scale, dz = (z - pl.pos.z) * scale;
+      return [R + dx * cosR - dz * sinR, R + ahead + dx * sinR + dz * cosR];
+    };
+    const inside = (sx, sy, pad = 0) => (sx - R) ** 2 + (sy - R) ** 2 < (RIN - pad) ** 2;
+    // pin a point to the rim along the ray from the map centre
+    const pin = (sx, sy, pad) => { const dx = sx - R, dy = sy - R, d = Math.hypot(dx, dy) || 1, r = RIN - pad; return [R + dx / d * r, R + dy / d * r]; };
+    const distTag = (m) => (m >= 1000 ? (m / 1000).toFixed(1) + 'k' : Math.round(m / 10) * 10 + '');
+
     c.clearRect(0, 0, S, S);
     c.save();
-    c.beginPath(); c.arc(R, R, R - 4, 0, Math.PI * 2); c.clip();
-    c.fillStyle = '#0b0f14'; c.fillRect(0, 0, S, S);
-    const range = 260 + clamp(pl.speed * 3, 0, 220); // meters radius
-    const scale = (R - 4) / range; // px per meter
-    c.translate(R, R);
-    c.rotate(Math.PI + pl.yaw); // heading up
-    // map image
+    c.beginPath(); c.arc(R, R, RIN, 0, Math.PI * 2); c.clip();
+    c.fillStyle = '#0a0d12'; c.fillRect(0, 0, S, S);
+    // ---- base map (pre-rendered terrain + city + roads) ----
+    c.save();
+    c.translate(R, R + ahead); c.rotate(rot);
     const img = world.minimapCanvas, ms = world.minimapScale;
-    const sx = (pl.pos.x + WORLD_HALF) * ms, sz = (pl.pos.z + WORLD_HALF) * ms;
-    const k = scale / ms;
-    c.globalAlpha = 0.95;
-    c.drawImage(img, sx - range * 1.5 * ms, sz - range * 1.5 * ms, range * 3 * ms, range * 3 * ms, -range * 1.5 * scale, -range * 1.5 * scale, range * 3 * scale, range * 3 * scale);
-    c.globalAlpha = 1;
-    const P = (x, z) => [(x - pl.pos.x) * scale, (z - pl.pos.z) * scale];
-    // route
-    if (g.route) {
-      c.strokeStyle = g.mode === 'cop' ? 'rgba(80,160,255,0.9)' : 'rgba(255,180,0,0.9)'; c.lineWidth = 3.5; c.lineJoin = 'round';
-      c.beginPath();
-      const pts = g.route.pts; const i0 = Math.max(0, (g.plIdx || 0) - 5);
-      let first = true;
-      for (let i = i0; i < pts.length; i++) {
-        const p = pts[i];
-        if (Math.abs(p.x - pl.pos.x) > range * 1.6 || Math.abs(p.z - pl.pos.z) > range * 1.6) { if (!first) break; continue; }
-        const [x, y] = P(p.x, p.z);
-        if (first) { c.moveTo(x, y); first = false; } else c.lineTo(x, y);
-      }
-      c.stroke();
-      if (g.gatePos && g.gates.visible) { const [x, y] = P(g.gatePos.x, g.gatePos.z); c.fillStyle = '#ffd000'; c.beginPath(); c.arc(x, y, 6, 0, 7); c.fill(); }
-    }
-    // spikes
-    c.fillStyle = '#ff9020';
-    for (const s of g.spikes) { const [x, y] = P(s.x, s.z); c.fillRect(x - 4, y - 1.5, 8, 3); }
-    // cars
-    const blink = (performance.now() / 250) % 2 < 1;
-    for (const o of g.cars) {
-      if (o === pl) continue;
-      const dx = o.pos.x - pl.pos.x, dz = o.pos.z - pl.pos.z;
-      if (Math.abs(dx) > range * 1.5 || Math.abs(dz) > range * 1.5) continue;
-      let [x, y] = P(o.pos.x, o.pos.z);
-      if (o.role === 'traffic') { c.fillStyle = 'rgba(200,200,200,0.5)'; c.fillRect(x - 2, y - 2, 4, 4); continue; }
-      const d = Math.hypot(x, y);
-      if (d > R - 12) { x *= (R - 12) / d; y *= (R - 12) / d; }
-      if (o.role === 'cop') {
-        c.fillStyle = o.wrecked ? '#555' : o.ai?.patrol ? '#9aa6ff' : blink ? '#ff2a2a' : '#2a5aff';
-        c.beginPath(); c.arc(x, y, 5.5, 0, 7); c.fill();
-        if (o.ai?.patrol && !o.wrecked) { c.strokeStyle = 'rgba(160,170,255,0.25)'; c.beginPath(); c.arc(x, y, 120 * scale, 0, 7); c.stroke(); }
-      } else if (o.role === 'racer') {
-        c.fillStyle = o.wrecked ? '#555' : '#' + o.model.paint.color.getHexString();
-        c.save(); c.translate(x, y); c.rotate(-o.yaw); c.beginPath(); c.moveTo(0, 7); c.lineTo(5, -5); c.lineTo(-5, -5); c.closePath(); c.fill();
-        c.strokeStyle = '#000'; c.lineWidth = 1; c.stroke(); c.restore();
-      }
-    }
+    const sx = (pl.pos.x + WORLD_HALF) * ms, sz = (pl.pos.z + WORLD_HALF) * ms, span = range * 1.6;
+    c.imageSmoothingEnabled = true;
+    c.drawImage(img, sx - span * ms, sz - span * ms, span * 2 * ms, span * 2 * ms, -span * scale, -span * scale, span * 2 * scale, span * 2 * scale);
     c.restore();
-    // player arrow
-    c.fillStyle = pl.police ? '#4aa0ff' : '#ffb000';
-    c.beginPath(); c.moveTo(R, R - 10); c.lineTo(R + 7, R + 7); c.lineTo(R, R + 3); c.lineTo(R - 7, R + 7); c.closePath(); c.fill();
-    // ring
-    c.strokeStyle = g.pursuit && g.mode !== 'cop' ? (blink ? '#ff3040' : '#3060ff') : 'rgba(255,255,255,0.35)';
-    c.lineWidth = 3; c.beginPath(); c.arc(R, R, R - 3, 0, Math.PI * 2); c.stroke();
-    c.fillStyle = 'rgba(255,255,255,0.6)'; c.font = '700 12px Rajdhani, sans-serif'; c.textAlign = 'center';
-    // north indicator
-    const na = Math.PI + pl.yaw; // rotate
-    const nx = R + Math.sin(-na + Math.PI) * (R - 16) * 0, ny = 0;
-    void nx; void ny;
+    // vignette toward the rim for depth
+    const vg = c.createRadialGradient(R, R, RIN * 0.55, R, R, RIN);
+    vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.45)');
+    c.fillStyle = vg; c.fillRect(0, 0, S, S);
+
+    // ---- race route: driven part dim, road ahead bright with flowing chevrons ----
+    const offMap = []; // [screenX, screenY, colour, label, kind]
+    if (g.route) {
+      const pts = g.route.pts, idx = g.plIdx || 0, lim = range * 1.7;
+      const col = g.mode === 'cop' ? '80,170,255' : '255,180,0';
+      const near = (p) => Math.abs(p.x - pl.pos.x) < lim && Math.abs(p.z - pl.pos.z) < lim;
+      c.lineJoin = 'round'; c.lineCap = 'round';
+      // behind
+      c.beginPath(); let first = true;
+      for (let i = Math.max(0, idx - 80); i <= idx && i < pts.length; i++) { if (!near(pts[i])) { first = true; continue; } const [x, y] = toS(pts[i].x, pts[i].z); if (first) { c.moveTo(x, y); first = false; } else c.lineTo(x, y); }
+      c.strokeStyle = `rgba(${col},0.28)`; c.lineWidth = 3; c.stroke();
+      // ahead: dark under-stroke + bright line
+      const ahd = []; for (let i = idx; i < pts.length; i++) { if (!near(pts[i])) { if (ahd.length) break; continue; } ahd.push(toS(pts[i].x, pts[i].z)); }
+      if (ahd.length > 1) {
+        c.beginPath(); ahd.forEach(([x, y], i) => (i ? c.lineTo(x, y) : c.moveTo(x, y)));
+        c.strokeStyle = 'rgba(0,0,0,0.55)'; c.lineWidth = 6.5; c.stroke();
+        c.strokeStyle = `rgba(${col},0.95)`; c.lineWidth = 3.5; c.stroke();
+        c.setLineDash([3, 11]); c.lineDashOffset = -(now / 40) % 14; // chevron flow = direction of travel
+        c.strokeStyle = 'rgba(255,255,255,0.75)'; c.lineWidth = 2; c.stroke(); c.setLineDash([]);
+      }
+      // checkpoints: upcoming ones as small ticks, the next one as a pulsing gate; finish as a chequered flag
+      if (g.checkpoints && g.checkpoints.length) {
+        const P = {};
+        for (let k = g.checkIdx || 0; k < g.checkpoints.length; k++) {
+          const isFinish = k === g.checkpoints.length - 1, isNext = k === (g.checkIdx || 0);
+          pointAtDist(g.route, g.checkpoints[k], P);
+          const [x, y] = toS(P.x, P.z);
+          const dist = Math.max(0, g.checkpoints[k] - (g.playerProgress || 0));
+          if (!inside(x, y, 8)) { if (isNext || isFinish) offMap.push([x, y, isFinish ? '#ffffff' : '#ffd000', distTag(dist), isFinish ? 'finish' : 'gate']); continue; }
+          if (isFinish) this.mmFlag(c, x, y);
+          else if (isNext) {
+            const pulse = 1 + 0.25 * Math.sin(now / 160);
+            c.fillStyle = 'rgba(255,208,0,0.25)'; c.beginPath(); c.arc(x, y, 10 * pulse, 0, 7); c.fill();
+            c.fillStyle = '#ffd000'; c.strokeStyle = '#000'; c.lineWidth = 1.5; c.beginPath(); c.arc(x, y, 5.5, 0, 7); c.fill(); c.stroke();
+          } else { c.fillStyle = 'rgba(255,208,0,0.6)'; c.beginPath(); c.arc(x, y, 3, 0, 7); c.fill(); }
+        }
+      }
+    }
+    // ---- hazards ----
+    for (const s of g.spikes) {
+      const [x, y] = toS(s.x, s.z); if (!inside(x, y)) continue;
+      c.save(); c.translate(x, y); c.rotate(rot - (s.yaw || 0) + Math.PI / 2);
+      c.fillStyle = '#ff9020'; c.fillRect(-6, -2, 12, 4); c.fillStyle = '#000';
+      for (let i = -5; i <= 4; i += 3) c.fillRect(i, -2, 1, 4);
+      c.restore();
+    }
+    for (const rb of g.roadblocks || []) {
+      if (rb.x == null) continue;
+      const [x, y] = toS(rb.x, rb.z); if (!inside(x, y)) continue;
+      c.fillStyle = blink ? '#ff3040' : '#ffffff'; c.strokeStyle = '#000'; c.lineWidth = 1.5;
+      c.beginPath(); c.rect(x - 8, y - 3, 16, 6); c.fill(); c.stroke();
+    }
+    // ---- cars ----
+    const arrow = (x, y, yaw, size, fill, stroke = '#000') => {
+      c.save(); c.translate(x, y); c.rotate(rot - yaw + Math.PI);
+      c.beginPath(); c.moveTo(0, -size * 1.25); c.lineTo(size, size); c.lineTo(0, size * 0.45); c.lineTo(-size, size); c.closePath();
+      c.fillStyle = fill; c.fill(); c.strokeStyle = stroke; c.lineWidth = 1.4; c.stroke(); c.restore();
+    };
+    // traffic first (lowest layer), then cops, then racers
+    c.fillStyle = 'rgba(210,215,225,0.55)';
+    for (const o of g.cars) {
+      if (o.role !== 'traffic') continue;
+      const [x, y] = toS(o.pos.x, o.pos.z); if (!inside(x, y)) continue;
+      c.save(); c.translate(x, y); c.rotate(rot - o.yaw); c.fillRect(-1.6, -2.6, 3.2, 5.2); c.restore();
+    }
+    const hunted = g.mode !== 'cop';
+    for (const o of g.cars) {
+      if (o === pl || o.role === 'traffic') continue;
+      const [x, y] = toS(o.pos.x, o.pos.z);
+      const dist = Math.hypot(o.pos.x - pl.pos.x, o.pos.z - pl.pos.z);
+      if (o.role === 'cop') {
+        const chasing = !o.wrecked && !o.ai?.patrol && hunted;
+        const col = o.wrecked ? '#4a4a4a' : o.ai?.patrol ? '#9aa6ff' : blink ? '#ff2a3a' : '#2a62ff';
+        if (!inside(x, y, 6)) { if (chasing && dist < 900) offMap.push([x, y, col, distTag(dist), 'cop']); continue; }
+        // vision cone for cops that are hunting / patrolling — shows where not to drive
+        if (!o.wrecked && hunted) {
+          const vr = (o.ai?.patrol ? 120 : 90) * scale, a0 = rot - o.yaw - Math.PI / 2;
+          const cg = c.createRadialGradient(x, y, 0, x, y, vr);
+          cg.addColorStop(0, o.ai?.patrol ? 'rgba(150,160,255,0.28)' : 'rgba(255,60,80,0.3)'); cg.addColorStop(1, 'rgba(0,0,0,0)');
+          c.fillStyle = cg; c.beginPath(); c.moveTo(x, y); c.arc(x, y, vr, a0 - 0.55, a0 + 0.55); c.closePath(); c.fill();
+        }
+        arrow(x, y, o.yaw, 5, col, o.wrecked ? '#000' : '#fff');
+      } else if (o.role === 'racer') {
+        const col = o.wrecked ? '#4a4a4a' : '#' + o.model.paint.color.getHexString();
+        if (!inside(x, y, 6)) { if (!o.wrecked && !o.out) offMap.push([x, y, col, distTag(dist), o.net?.human ? 'human' : 'racer']); continue; }
+        arrow(x, y, o.yaw, 5, col, o.net?.human ? '#fff' : '#000');
+        if (o.net?.human && o.name) { // other human players get a name tag
+          c.font = '700 10px Rajdhani, sans-serif'; c.textAlign = 'center';
+          c.lineWidth = 3; c.strokeStyle = 'rgba(0,0,0,0.8)'; c.strokeText(o.name, x, y - 10); c.fillStyle = '#fff'; c.fillText(o.name, x, y - 10);
+        }
+      }
+    }
+    c.restore(); // end clip
+
+    // ---- rim: pursuit ring, compass, off-map pins ----
+    const pursuit = g.pursuit && g.mode !== 'cop';
+    c.lineWidth = 4;
+    c.strokeStyle = pursuit ? (blink ? '#ff3040' : '#3060ff') : 'rgba(255,255,255,0.28)';
+    c.beginPath(); c.arc(R, R, R - 3, 0, Math.PI * 2); c.stroke();
+    if (pursuit && g.bust > 0) { // bust meter as an arc on the rim
+      c.strokeStyle = '#ff3040'; c.lineWidth = 4;
+      c.beginPath(); c.arc(R, R, R - 3, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * clamp(g.bust, 0, 1)); c.stroke();
+    }
+    // compass: N/E/S/W letters around the rim (world -Z = north on the base map)
+    c.font = '800 11px Rajdhani, sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
+    for (const [lbl, wx, wz] of [['N', 0, -1], ['E', 1, 0], ['S', 0, 1], ['W', -1, 0]]) {
+      const dx = wx * cosR - wz * sinR, dy = wx * sinR + wz * cosR;
+      const x = R + dx * (R - 11), y = R + dy * (R - 11);
+      c.fillStyle = 'rgba(0,0,0,0.55)'; c.beginPath(); c.arc(x, y, 7, 0, 7); c.fill();
+      c.fillStyle = lbl === 'N' ? '#ff5050' : 'rgba(255,255,255,0.7)'; c.fillText(lbl, x, y + 0.5);
+    }
+    // off-map pins: coloured wedge pointing outward + distance
+    for (const [x0, y0, col, tag, kind] of offMap) {
+      const [x, y] = pin(x0, y0, 24), a = Math.atan2(y - R, x - R); // inside the compass ring so N/E/S/W never overlap
+      c.save(); c.translate(x, y); c.rotate(a);
+      c.beginPath(); c.moveTo(8, 0); c.lineTo(-3, -6); c.lineTo(-3, 6); c.closePath();
+      c.fillStyle = kind === 'finish' ? '#fff' : col; c.fill(); c.strokeStyle = '#000'; c.lineWidth = 1.2; c.stroke();
+      c.restore();
+      const tx = R + (x - R) * 0.84, ty = R + (y - R) * 0.84;
+      c.font = '700 10px Rajdhani, sans-serif'; c.lineWidth = 3; c.strokeStyle = 'rgba(0,0,0,0.85)';
+      c.strokeText(tag, tx, ty); c.fillStyle = kind === 'cop' ? '#ff8090' : '#fff'; c.fillText(tag, tx, ty);
+    }
+    // ---- player: heading arrow with soft glow, fixed below centre ----
+    const px = R, py = R + ahead;
+    c.fillStyle = 'rgba(255,255,255,0.12)'; c.beginPath(); c.arc(px, py, 13, 0, 7); c.fill();
+    c.fillStyle = pl.police ? '#4aa0ff' : '#ffb000'; c.shadowColor = c.fillStyle; c.shadowBlur = 8;
+    c.beginPath(); c.moveTo(px, py - 11); c.lineTo(px + 7.5, py + 7); c.lineTo(px, py + 2.5); c.lineTo(px - 7.5, py + 7); c.closePath(); c.fill();
+    c.shadowBlur = 0; c.strokeStyle = '#000'; c.lineWidth = 1.5; c.stroke();
+    // zoom indicator
+    if (this.mapZoomShow > 0) {
+      this.mapZoomShow -= dt;
+      c.font = '800 11px Rajdhani, sans-serif'; c.fillStyle = 'rgba(255,255,255,0.85)'; c.textBaseline = 'alphabetic';
+      c.fillText(['ZOOM AUTO', 'ZOOM NEAR', 'ZOOM FAR'][this.mapZoom || 0], R, S - 22);
+    }
+    c.textBaseline = 'alphabetic';
   }
+  mmFlag(c, x, y) {
+    c.fillStyle = '#000'; c.fillRect(x - 0.75, y - 12, 1.5, 13);
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 2; j++) { c.fillStyle = (i + j) % 2 ? '#000' : '#fff'; c.fillRect(x + 0.75 + i * 3, y - 12 + j * 3, 3, 3); }
+    c.strokeStyle = '#000'; c.lineWidth = 0.8; c.strokeRect(x + 0.75, y - 12, 9, 6);
+  }
+  cycleMapZoom() { this.mapZoom = ((this.mapZoom || 0) + 1) % 3; this.mapZoomShow = 1.4; }
 
   updateMarkers(g, camera) {
     const list = [];

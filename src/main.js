@@ -209,6 +209,7 @@ function loop(now) {
     game.update(dt);
   }
   if (app === 'game' && game.state !== 'ending' && game.state !== 'result') {
+    if (input.hit('KeyZ')) hud.cycleMapZoom(); // minimap zoom: auto / near / far
     rig.lookBack = input.k('KeyV', 'PadDown');
   } else rig.lookBack = false;
   const mh = $('mouse-hint'), needMh = lookAllowed() && settings.mouseLook === 2 && document.pointerLockElement !== canvas;

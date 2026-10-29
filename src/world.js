@@ -735,6 +735,7 @@ export class World {
       if (this.mapId === 'stuttgart' && type === 'build' && Math.hypot(cx - 60, cz + 180) < 160) type = 'park';
       blocks.push({ cx, cz, type, d });
     }
+    this.cityBlocks = blocks; this.cityBlockSize = S - STREET_HALF_W * 2; // minimap reads these
     const bs = S - W * 2; // block size (100)
     const CN = ENV.pbr.concrete; const concTex = CN.map; concTex.repeat.set(bs / 6, bs / 6); for (const t of [CN.normalMap, CN.roughnessMap]) { t.repeat.set(bs / 6, bs / 6); t.wrapS = t.wrapT = THREE.RepeatWrapping; } concTex.wrapS = concTex.wrapT = THREE.RepeatWrapping;
     const slabGeo = new THREE.BoxGeometry(bs, 0.3, bs); slabGeo.translate(0, 0.15, 0);
@@ -1276,35 +1277,66 @@ export class World {
     const S = 2048, sc = S / (WORLD_HALF * 2);
     const c = document.createElement('canvas'); c.width = c.height = S;
     const ctx = c.getContext('2d');
-    const img = ctx.createImageData(S / 4, S / 4);
-    for (let j = 0; j < S / 4; j++) for (let i = 0; i < S / 4; i++) {
-      const x = (i * 4) / sc - WORLD_HALF, z = (j * 4) / sc - WORLD_HALF;
+    // Terrain: elevation tint + hillshade (NW light) so hills, valleys and coastlines read at a glance
+    const N = S / 4, cell = (WORLD_HALF * 2) / N;
+    const img = ctx.createImageData(N, N);
+    const tokyo = this.mapId === 'tokyo', stutt = this.mapId === 'stuttgart';
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+      const x = i * cell - WORLD_HALF, z = j * cell - WORLD_HALF;
       const h = this.hf.get(x, z);
-      const k = (j * (S / 4) + i) * 4;
-      if (h < WATER_LEVEL) { img.data[k] = 10; img.data[k + 1] = 30; img.data[k + 2] = 52; }
-      else { const v = clamp(26 + h * 0.18, 20, 90); img.data[k] = v * 0.8; img.data[k + 1] = v; img.data[k + 2] = v * 0.85; }
+      const k = (j * N + i) * 4;
+      if (h < WATER_LEVEL) {
+        const depth = clamp((WATER_LEVEL - h) / 14, 0, 1);
+        const shore = depth < 0.08 ? 1 - depth / 0.08 : 0; // bright shallow rim along the coast
+        img.data[k] = 12 + 22 * shore; img.data[k + 1] = 38 - 12 * depth + 34 * shore; img.data[k + 2] = 70 - 20 * depth + 40 * shore;
+      } else {
+        // slope over a wide baseline (3 cells) so fine terrain noise doesn't turn into TV static; gentle gain
+        const o = cell * 3;
+        const hx = this.hf.get(x + o, z) - this.hf.get(x - o, z), hz = this.hf.get(x, z + o) - this.hf.get(x, z - o);
+        const shade = clamp(1 + (-hx - hz) / (o * 2) * 0.7, 0.72, 1.25); // light from -x,-z
+        const e = clamp((h - WATER_LEVEL) / 120, 0, 1); // lowland green -> highland rock
+        let r = 34 + 30 * e, g = 52 + 14 * e, b = 34 + 30 * e;
+        if (tokyo) { r *= 0.75; g *= 0.75; b *= 0.95; }
+        img.data[k] = clamp(r * shade, 0, 255); img.data[k + 1] = clamp(g * shade, 0, 255); img.data[k + 2] = clamp(b * shade, 0, 255);
+      }
       img.data[k + 3] = 255;
     }
-    const tmp = document.createElement('canvas'); tmp.width = tmp.height = S / 4; tmp.getContext('2d').putImageData(img, 0, 0);
+    const tmp = document.createElement('canvas'); tmp.width = tmp.height = N; tmp.getContext('2d').putImageData(img, 0, 0);
     ctx.imageSmoothingEnabled = true;
     ctx.drawImage(tmp, 0, 0, S, S);
     const tx = (x) => (x + WORLD_HALF) * sc;
-    // city blocks
-    ctx.fillStyle = this.mapId === 'tokyo' ? '#1a1830' : this.mapId === 'stuttgart' ? '#1e1c18' : '#2b3036';
-    ctx.fillRect(tx(-612), tx(-612), 1224 * sc, 1224 * sc);
-    ctx.fillStyle = '#15181c';
-    for (let i = -CITY_HALF; i < CITY_HALF; i += STREET_SPACING) for (let j = -CITY_HALF; j < CITY_HALF; j += STREET_SPACING)
-      ctx.fillRect(tx(i + 10), tx(j + 10), 100 * sc, 100 * sc);
+    // Palette per map: street fill (= road fill so the grid reads as roads), building blocks, parks, plazas, road casing
+    const P = tokyo ? { street: '#3a4058', build: '#1b1a2e', park: '#1f3a2a', plaza: '#3c3a52', tower: '#ff5a3c', road: '#5a6688', hw: '#ff4fb4', casing: '#08070f' }
+      : stutt ? { street: '#5f6670', build: '#2a2622', park: '#2e4a22', plaza: '#6c6458', tower: '#e8a040', road: '#8a949e', hw: '#e8a040', casing: '#0f0e0c' }
+        : { street: '#626a74', build: '#2c3138', park: '#2f5226', plaza: '#6a7078', tower: '#ffb000', road: '#8a939c', hw: '#c9d2da', casing: '#0d1014' };
+    // city: streets are the gaps between blocks
+    ctx.fillStyle = P.casing; ctx.fillRect(tx(-CITY_HALF - 14), tx(-CITY_HALF - 14), (CITY_HALF * 2 + 28) * sc, (CITY_HALF * 2 + 28) * sc);
+    ctx.fillStyle = P.street; ctx.fillRect(tx(-CITY_HALF - 12), tx(-CITY_HALF - 12), (CITY_HALF * 2 + 24) * sc, (CITY_HALF * 2 + 24) * sc);
+    const bs = this.cityBlockSize || STREET_SPACING - 20;
+    const blocks = this.cityBlocks || [];
+    for (const b of blocks) {
+      ctx.fillStyle = P[b.type] || P.build;
+      ctx.fillRect(tx(b.cx - bs / 2), tx(b.cz - bs / 2), bs * sc, bs * sc);
+      if (b.type === 'build') { // subtle lot subdivision so blocks read as buildings, not flat tiles
+        ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(tx(b.cx), tx(b.cz - bs / 2 + 6)); ctx.lineTo(tx(b.cx), tx(b.cz + bs / 2 - 6));
+        ctx.moveTo(tx(b.cx - bs / 2 + 6), tx(b.cz)); ctx.lineTo(tx(b.cx + bs / 2 - 6), tx(b.cz)); ctx.stroke();
+      }
+    }
+    if (!blocks.length) { // fallback: plain grid
+      ctx.fillStyle = P.build;
+      for (let i = -CITY_HALF; i < CITY_HALF; i += STREET_SPACING) for (let j = -CITY_HALF; j < CITY_HALF; j += STREET_SPACING)
+        ctx.fillRect(tx(i + 10), tx(j + 10), 100 * sc, 100 * sc);
+    }
+    // roads: dark casing pass first, then fill (highways wider and brighter, with a centre line)
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    const path = (r) => { ctx.beginPath(); r.pts.forEach((p, i) => (i ? ctx.lineTo(tx(p.x), tx(p.z)) : ctx.moveTo(tx(p.x), tx(p.z)))); if (r.closed) ctx.closePath(); };
+    const width = (r) => Math.max(2.2, r.halfW * 2 * sc * (r.kind === 'highway' ? 1.5 : 1.3));
+    for (const r of this.net.roads) { path(r); ctx.strokeStyle = P.casing; ctx.lineWidth = width(r) + 2.5; ctx.stroke(); }
+    for (const r of this.net.roads) { path(r); ctx.strokeStyle = r.kind === 'highway' ? P.hw : P.road; ctx.lineWidth = width(r); ctx.stroke(); }
     for (const r of this.net.roads) {
-      ctx.strokeStyle = this.mapId === 'tokyo' ? (r.kind === 'highway' ? '#ff4fb4' : '#3fd8ff')
-        : this.mapId === 'stuttgart' ? (r.kind === 'highway' ? '#e8a040' : '#8a9aaa')
-        : (r.kind === 'highway' ? '#8f9aa6' : '#727c86');
-      ctx.lineWidth = r.halfW * 2 * sc * 1.2;
-      ctx.beginPath();
-      r.pts.forEach((p, i) => (i ? ctx.lineTo(tx(p.x), tx(p.z)) : ctx.moveTo(tx(p.x), tx(p.z))));
-      if (r.closed) ctx.closePath();
-      ctx.stroke();
+      if (r.kind !== 'highway') continue;
+      path(r); ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 0.8; ctx.setLineDash([4, 5]); ctx.stroke(); ctx.setLineDash([]);
     }
     this.minimapCanvas = c;
     this.minimapScale = sc;
