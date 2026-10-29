@@ -60,6 +60,7 @@ export class HUD {
     const pl = g.player; if (!pl) return;
     this.dmgFlash = Math.max(0, this.dmgFlash - dt * 1.5);
     const kmh = Math.round(pl.speed * MS_TO_KMH);
+    this._manual = !!pl.manual;
     this.drawSpeedo(kmh, pl.rpm, pl.gear, pl.nitro, pl.health, pl.nitroActive, pl.vF < -0.5);
     this.drawGMeter(pl.accelLong, pl.accelLat);
     const trip = $('trip');
@@ -213,6 +214,7 @@ export class HUD {
     c.fillText('km/h', cx, cy + 46);
     c.font = 'italic 800 34px Rajdhani, sans-serif'; c.fillStyle = '#ffb000';
     c.fillText(rev ? 'R' : String(gear), cx, cy + 96);
+    if (this._manual) { c.font = '700 12px Rajdhani, sans-serif'; c.fillStyle = 'rgba(255,176,0,0.8)'; c.fillText('MANUAL', cx, cy + 112); }
     c.font = '700 12px Rajdhani, sans-serif'; c.fillStyle = '#6fb8ff'; c.fillText('NITRO', cx - 70, cy + 4 - 40);
     c.fillStyle = hcol; c.fillText('DAMAGE', cx + 70, cy - 36);
   }

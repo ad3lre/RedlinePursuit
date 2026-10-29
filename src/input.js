@@ -84,8 +84,9 @@ export class Input {
     const rate = target === 0 ? 7 : Math.sign(target) !== Math.sign(this.steerSmooth) ? 9 : 4.2;
     this.steerSmooth += Math.max(-rate * dt, Math.min(rate * dt, target - this.steerSmooth));
     steer = this.steerSmooth;
-    throttle = this.k('KeyW', 'ArrowUp') ? 1 : 0;
-    brake = this.k('KeyS', 'ArrowDown') ? 1 : 0;
+    // ArrowUp / ArrowDown are manual gear shift (see Game: shiftUp/shiftDown); W / S drive
+    throttle = this.k('KeyW') ? 1 : 0;
+    brake = this.k('KeyS') ? 1 : 0;
     let handbrake = this.k('Space') ? 1 : 0;
     let nitro = this.k('ShiftLeft', 'ShiftRight', 'KeyN') ? 1 : 0;
     if (this.padCount) {

@@ -37,8 +37,9 @@ Keyboard and gamepad (Xbox / PlayStation / generic) are fully supported.
 
 | Key | Action |
 |:---|:---|
-| <kbd>W</kbd> / <kbd>↑</kbd> | Accelerate |
-| <kbd>S</kbd> / <kbd>↓</kbd> | Brake / reverse |
+| <kbd>W</kbd> | Accelerate |
+| <kbd>S</kbd> | Brake / reverse |
+| <kbd>↑</kbd> / <kbd>↓</kbd> | Shift up / down — first press switches the car to manual (no more auto shifts) |
 | <kbd>A</kbd> <kbd>D</kbd> / <kbd>←</kbd> <kbd>→</kbd> | Steer |
 | <kbd>SPACE</kbd> | Handbrake (start a drift) |
 | <kbd>SHIFT</kbd> / <kbd>N</kbd> | Nitro (charged by drifting, near misses, etc.) |

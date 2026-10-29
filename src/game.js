@@ -982,6 +982,11 @@ export class Game {
         if (pl.nitroActive === false && d.nitro && pl.nitro > 0.05 && !this._nitroWas) { this.audio.nitroStart(); this.punch('nitro', 1); }
         this._nitroWas = d.nitro && pl.nitro > 0.05;
         if (input.hit('KeyR', 'PadBack')) this.resetPlayer();
+        // manual gearbox: first press switches the car to manual for good (no more auto shifting)
+        if (!this.inputLocked) {
+          if (input.hit('ArrowUp')) pl.shiftManual(1);
+          if (input.hit('ArrowDown')) pl.shiftManual(-1);
+        }
         if (this.mode === 'cop') this.copAbilities(dt);
       } else { pl.input.throttle = 0; pl.input.brake = 0.6; pl.input.nitro = 0; }
       // AI

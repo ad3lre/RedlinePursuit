@@ -99,6 +99,26 @@ export class Car {
   // lateral grip limit in m/s² (no downforce): what the AI plans its corner speeds around
   gripLimit() { return (this.spec.grip / 7.6) * G; }
 
+  // gear speed bands [0, shift1, shift2, …, 999] and gear count for this car
+  gearBands() {
+    const eng = resolveEngine(this.spec.id, this.spec.kind);
+    if (eng.electric > 0.5) return null;
+    const shifts = eng.shiftSpeeds?.length ? eng.shiftSpeeds : [16, 29, 42, 56, 71];
+    return { ratios: [0, ...shifts, 999], maxGear: Math.min(6, shifts.length + 1) };
+  }
+
+  // Manual shift (dir +1 up / -1 down). The first call converts the gearbox to manual permanently.
+  shiftManual(dir) {
+    const b = this.gearBands();
+    if (!b) return; // EV: single-speed, nothing to shift
+    this.manual = true;
+    const g = clamp((this.gear || 1) + dir, 1, b.maxGear);
+    if (g === this.gear) return;
+    this.shifted = dir > 0 ? 1 : -1;
+    this.shiftTimer = dir > 0 ? 0.3 : 0.2;
+    this.gear = g;
+  }
+
   get fwdX() { return Math.sin(this.yaw); }
   get fwdZ() { return Math.cos(this.yaw); }
 
@@ -111,6 +131,7 @@ export class Car {
     this.normal.set(0, 1, 0);
     this._imuReady = false; this.accelLong = 0; this.accelLat = 0; this.imuLong = 0; this.imuLat = 0; this.imuVert = 0;
     this.odometer = 0;
+    if (this.manual && speed < 5) { this.gear = 1; this.shiftTimer = 0; } // respawn from standstill in 1st
     this.syncVisual(0);
   }
 
@@ -144,6 +165,16 @@ export class Car {
     if (this.offroad) maxV *= 0.62;
     if (this.boost) maxV *= this.boost;
     if (this.exitBoost > 0) { maxV *= 1.12; this.exitBoost = Math.max(0, this.exitBoost - dt); }
+    // manual gearbox: rev limiter caps speed per gear; too high a gear for the speed lugs (weak pull)
+    let gearPull = 1;
+    const mb = this.manual ? this.gearBands() : null;
+    if (mb) {
+      const g = clamp(this.gear || 1, 1, mb.maxGear);
+      if (g < mb.maxGear) maxV = Math.min(maxV, mb.ratios[g] * 1.12);
+      const lo = mb.ratios[g - 1];
+      if (g > 1 && sp < lo * 0.86) gearPull = clamp(0.25 + 0.75 * sp / (lo * 0.86), 0.25, 1);
+      if (this.shiftTimer > 0) gearPull *= 0.35; // clutch in during the shift
+    }
 
     // ---- tyre budget ----------------------------------------------------------------------------------------
     // One friction budget (mu*g) shared by braking, driving and cornering ("friction circle"). Surface, damage and
@@ -159,7 +190,7 @@ export class Car {
       if (inp.throttle > 0) {
         if (vF < maxV) {
           const r = clamp(vF / maxV, 0, 1);
-          let ad = spec.accel * 0.82 * (1 - Math.pow(r, 1.5) * 0.85) * inp.throttle * (this.boost || 1);
+          let ad = spec.accel * 0.82 * (1 - Math.pow(r, 1.5) * 0.85) * inp.throttle * (this.boost || 1) * gearPull;
           if (this.nitroActive) ad += 15;
           if (this.exitBoost > 0) ad += 9;
           const trac = muG * 0.97; // traction limit: launches spin the wheels instead of teleporting
@@ -316,9 +347,11 @@ export class Car {
       const shifts = eng.shiftSpeeds?.length ? eng.shiftSpeeds : [16, 29, 42, 56, 71];
       const ratios = [0, ...shifts, 999];
       const maxGear = Math.min(6, shifts.length + 1);
-      let gear = this.gear || 1;
-      while (gear < maxGear && av > ratios[gear]) gear++;
-      while (gear > 1 && av < ratios[gear - 1] * 0.86) gear--;
+      let gear = clamp(this.gear || 1, 1, maxGear);
+      if (!this.manual) {
+        while (gear < maxGear && av > ratios[gear]) gear++;
+        while (gear > 1 && av < ratios[gear - 1] * 0.86) gear--;
+      }
       if (gear !== this.gear) {
         this.shifted = gear > this.gear ? 1 : -1;
         this.shiftTimer = gear > this.gear ? 0.3 : 0.2;
