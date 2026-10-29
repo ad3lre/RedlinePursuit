@@ -34,6 +34,9 @@ const DATA = {
   'vito_0.wav': vito0, 'vito_1.wav': vito1, 'vito_2.wav': vito2,
 };
 
+// beyond ~1.6x a recording gets the "chipmunk" squeal; past that the (tamed) synth carries the top end instead
+const MAX_RATE = 1.6;
+
 const decoded = new Map(); // file -> Promise<AudioBuffer>
 function decode(ctx, file) {
   if (!decoded.has(file)) {
@@ -95,19 +98,19 @@ export class EngineSampler {
       const v = vs[i];
       const w = i === lo && i === hi ? 1 : i === lo ? Math.cos(t * Math.PI / 2) : i === hi ? Math.sin(t * Math.PI / 2) : 0;
       // clamp pitch shift: beyond ~2.4x the recording turns cartoonish; the synth layer covers the rest
-      const rate = Math.min(2.4, Math.max(0.45, rpm / v.rpm));
+      const rate = Math.min(MAX_RATE, Math.max(0.45, rpm / v.rpm));
       v.src.playbackRate.setTargetAtTime(rate, now, 0.03);
       v.g.gain.setTargetAtTime(w, now, 0.04);
     }
     // off-throttle sounds duller / quieter (overrun), on load opens up
-    this.tone.frequency.setTargetAtTime(1600 + thr * 5200 + Math.min(1, rpm / 7000) * 1500, now, 0.06);
+    this.tone.frequency.setTargetAtTime(1500 + thr * 2600 + Math.min(1, rpm / 7000) * 600, now, 0.06);
     this.out.gain.setTargetAtTime(level * (0.55 + 0.45 * thr), now, 0.04);
   }
 
   /** how much of the current RPM is beyond the bank's highest recording (0..1) — synth fills that region */
   overTop(rpm) {
     if (!this.voices.length) return 1;
-    const top = this.voices[this.voices.length - 1].rpm * 2.4;
+    const top = this.voices[this.voices.length - 1].rpm * MAX_RATE;
     return Math.min(1, Math.max(0, (rpm - top * 0.8) / (top * 0.4)));
   }
 }

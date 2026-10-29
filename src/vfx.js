@@ -256,7 +256,9 @@ export class VFX {
     const L = car.dims.wb, W = car.dims.W / 2 - 0.2;
     const sp = car.speed;
     const lat = Math.abs(car.vR);
-    const spin = car.input.throttle > 0.8 && car.vF < 14 && car.vF > 0.5 && car.grounded && car.role === 'player';
+    // launch wheelspin only while actually launching in 1st (hard acceleration from low speed) — not while holding
+    // the throttle against the rev limiter in a low manual gear, which used to trigger permanent tyre screech
+    const spin = car.input.throttle > 0.8 && car.vF < 14 && car.vF > 0.5 && car.grounded && car.role === 'player' && (car.gear || 1) <= 1 && (car.accelLong || 0) > 4;
     const skidAmt = car.grounded ? clamp((lat - 2.5) / 8, 0, 1) + (car.input.handbrake && sp > 5 ? 0.5 : 0) + (spin ? 0.6 : 0) + (car.input.brake > 0.7 && car.vF > 18 ? 0.35 : 0) : 0;
     car.skidAmt = clamp(skidAmt, 0, 1);
     if (skidAmt > 0.15 && !car.offroad) {
