@@ -62,6 +62,7 @@ GLB_MODELS.gt3rs = { model: 'gt3rs', auto: true, hud: 0xd8d018 };
 // Tall keepTextures cabins need hand-tuned eyes — auto H*0.82 sits inside the roof.
 GLB_MODELS.cybertruck = { model: 'cybertruck', auto: true, hud: 0xb8bcc2, eye: { x: 0.36, y: 1.52, z: 0.85 }, hoodEye: { x: 0, y: 1.15, z: 2.15 } };
 GLB_MODELS.vito = { model: 'vito', auto: true, hud: 0xf2f2f2, eye: { x: 0.45, y: 1.36, z: 0.62 }, hoodEye: { x: 0, y: 1.12, z: 2.00 } };
+GLB_MODELS.jesko = { model: 'jesko', auto: true, hud: 0xe8e8ea };
 GLB_MODELS.mini = { model: 'mini', auto: true, hud: 0xc8102e };
 GLB_MODELS.corolla = { model: 'corolla', auto: true, hud: 0xc8ccd2 };
 for (const id of ['compact', 'coupe', 'hatchback', 'minivan', 'offroad', 'pickup', 'sedan', 'sport', 'suv', 'wagon']) GLB_MODELS[id] = { model: id, auto: true, hud: { compact: 0x4cc0e0, coupe: 0x2030c0, hatchback: 0xe8d040, minivan: 0x801818, offroad: 0x2a4a20, pickup: 0x1a6a2a, sedan: 0xb0a040, sport: 0xc81818, suv: 0x202020, wagon: 0x4a90a0 }[id] };
@@ -175,6 +176,22 @@ function sprite(tex, size, color = 0xffffff, opacity = 1) {
   s.userData.baseScale = size; s.userData.baseOpacity = opacity;
   return s;
 }
+// Lamp glare sprite that never slices into the ground / bodywork: the billboard is pulled toward the camera before the
+// depth test (so the half that would sit "inside" the road/bumper isn't cut off with a hard horizontal edge), and the
+// glow fades out when the lamp itself is hidden behind geometry is handled by the core staying depth-tested.
+function glareSprite(tex, size, color, opacity, pull) {
+  const m = new THREE.SpriteMaterial({ map: tex, color, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, fog: true, opacity });
+  // pull is a compile-time constant (2 variants total), so the program is shared across all cars
+  m.onBeforeCompile = (sh) => {
+    sh.vertexShader = sh.vertexShader.replace('gl_Position = projectionMatrix * mvPosition;',
+      // move the billboard toward the camera by up to `pull` metres (never past the near plane)
+      `mvPosition.xyz *= max(0.05, 1.0 - ${pull.toFixed(2)} / max(0.1, length(mvPosition.xyz)));\n gl_Position = projectionMatrix * mvPosition;`);
+  };
+  m.customProgramCacheKey = () => 'glare' + pull;
+  const s = new THREE.Sprite(m);
+  s.scale.set(size, size, 1); s.userData.baseScale = size; s.userData.baseOpacity = opacity;
+  return s;
+}
 
 /** Layered lamp flare: tight hot core + soft bloom halo. kind: 'head' | 'tail'. sparse=true → core only (AI/traffic). */
 function addLampFlare(body, pos, kind, heads, sparse = false) {
@@ -184,11 +201,13 @@ function addLampFlare(body, pos, kind, heads, sparse = false) {
   core.position.copy(pos); core.userData.lamp = kind; core.userData.layer = 'core';
   body.add(core); heads.push(core);
   if (sparse) return;
-  const halo = sprite(isHead ? sh.glowW : sh.glowR, isHead ? 2.4 : 1.55, isHead ? 0xffe8c8 : 0xff2a18, isHead ? 0.42 : 0.5);
+  // halo/bloom are big soft billboards around a lamp ~0.6 m off the road: depth-tested in place they were cut by the
+  // asphalt and the bumper (hard horizontal edge = "cheap asset" look). Pulled toward the camera instead + smaller.
+  const halo = glareSprite(isHead ? sh.glowW : sh.glowR, isHead ? 1.5 : 1.15, isHead ? 0xffe8c8 : 0xff2a18, isHead ? 0.38 : 0.45, 1.2);
   halo.position.copy(pos); halo.userData.lamp = kind; halo.userData.layer = 'halo';
   body.add(halo); heads.push(halo);
   if (isHead) {
-    const bloom = sprite(sh.glowW, 4.2, 0xffd9a0, 0.18);
+    const bloom = glareSprite(sh.glowW, 2.6, 0xffd9a0, 0.12, 2.0);
     bloom.position.copy(pos); bloom.userData.lamp = kind; bloom.userData.layer = 'bloom';
     body.add(bloom); heads.push(bloom);
   }

@@ -112,6 +112,17 @@ export const CAR_ENGINES = {
     gears: [4.40, 2.40, 1.50, 1.00, 0.80, 0.65], finalDrive: 3.45,
     shiftSpeeds: [12, 22, 34, 48, 62],
   },
+  // Koenigsegg Jesko: 5.0 L twin-turbo flat-plane V8 (1600 hp on E85), 8500 rpm redline, Light Speed 9-speed (modelled as 7 ratios)
+  jesko: {
+    layout: 'v8', cyl: 8, idleRpm: 900, redlineRpm: 8500,
+    sub: 0.34, h05: 0.04, h15: 0.35, h2: 0.55, h3: 0.46, h4: 0.34,
+    lope: 10, lopeAmt: 0.05,
+    fA: 190, fB: 860, fC: 2400, qA: 3.4, qB: 4.2, qC: 3.4,
+    turbo: 1.3, whine: 1.3, burble: 1.1, diesel: 0, electric: 0, red: 0.96,
+    intake: 1.4, body: 0.95,
+    gears: [3.50, 2.45, 1.85, 1.50, 1.25, 1.05, 0.90], finalDrive: 3.60,
+    shiftSpeeds: [17, 32, 48, 66, 86, 108],
+  },
   // Toyota Corolla 2.0 Dynamic Force I4 (M20A-FKS, NA) — smooth, unobtrusive, CVT-style long gearing
   corolla: {
     layout: 'i4', cyl: 4, idleRpm: 700, redlineRpm: 6600,

@@ -3,9 +3,9 @@ import * as THREE from 'three';
 import { Car, PLAYER_CARS, RACER_COLORS, TRAFFIC_SPECS, RIVAL_MODELS } from './car.js';
 import { RacerAI, CopAI, TrafficAI } from './ai.js';
 import { buildRoute, projectOnRoute, pointAtDist } from './roads.js';
-import { clamp, lerp, wrapAngle } from './util.js';
+import { clamp, lerp, wrapAngle, damp } from './util.js';
 import { WATER_LEVEL } from './terrain.js';
-import { glowTexture, softGlowTexture, beamTexture } from './textures.js';
+import { glowTexture, softGlowTexture, beamTexture, headlampPattern } from './textures.js';
 import { MAPS } from './world.js';
 import { MS_TO_KMH } from './units.js';
 import { Feel } from './feel.js';
@@ -45,10 +45,20 @@ export class Game {
       const l = new THREE.SpotLight(color, 0, dist, angle, pen, decay);
       this.scene.add(l); this.scene.add(l.target); return l;
     };
+    // Real projector headlamps: each SpotLight projects a low-beam pattern (sharp cut-off, kerb-side kick-up) onto the
+    // road via SpotLight.map, so the light lands on the asphalt ahead instead of a fake glowing slab.
+    this.lowPattern = headlampPattern(256, false);
+    this.highPattern = headlampPattern(256, true);
     this.headlights = [
-      mkSpot(0xfff1dc, 120, 0.36, 0.48, 1.35),
-      mkSpot(0xfff1dc, 120, 0.36, 0.48, 1.35),
+      mkSpot(0xfff3e2, 150, 0.62, 0.35, 1.1),
+      mkSpot(0xfff3e2, 150, 0.62, 0.35, 1.1),
     ];
+    for (const l of this.headlights) {
+      l.map = this.lowPattern;
+      l.shadow.mapSize.set(512, 512); l.shadow.bias = -0.0004; l.shadow.normalBias = 0.04;
+      l.shadow.camera.near = 0.5; l.shadow.camera.far = 150;
+    }
+    this.highBeam = false;
     this.headFlood = mkSpot(0xe8f2ff, 70, 0.78, 0.82, 1.55);
     this.headFill = new THREE.PointLight(0xffe6c4, 0, 14, 2); this.scene.add(this.headFill);
     this.brakeGlow = new THREE.PointLight(0xff1808, 0, 16, 2); this.scene.add(this.brakeGlow);
@@ -69,34 +79,59 @@ export class Game {
     if (this.rig) this.rig.fovKick = Math.max(this.rig.fovKick || 0, this.feel.fovKick);
   }
 
+  // Volumetric headlamp shafts. The old version was two crossed flat sheets (one lying flat), which sliced through the
+  // asphalt and showed hard polygon edges — the "cheap clipping" look. Now: a true cone mesh per lamp, rendered with a
+  // view-dependent shader (bright when looking down the beam axis, near-invisible side-on), soft fade at the lens and
+  // the tip, and a depth-aware soft intersection so where the cone meets the road it fades out instead of cutting.
   makeHeadBeams() {
-    const tex = beamTexture(256);
-    const mat = new THREE.MeshBasicMaterial({
-      map: tex, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending,
-      depthWrite: false, side: THREE.DoubleSide, fog: true,
-    });
     const g = new THREE.Group();
+    const LEN = 34, R = 4.6;
+    const geo = new THREE.ConeGeometry(R, LEN, 40, 12, true);
+    geo.translate(0, -LEN / 2, 0); geo.rotateX(-Math.PI / 2); // apex at origin, opening along +Z
+    this.beamUniforms = { uOpacity: { value: 0 }, uLen: { value: LEN }, uColor: { value: new THREE.Color(0xfff0d8) }, uGround: { value: 0 } };
+    const mat = new THREE.ShaderMaterial({
+      uniforms: this.beamUniforms,
+      vertexShader: `
+        varying vec3 vWorld; varying vec3 vNormalW; varying float vAlong;
+        uniform float uLen;
+        void main() {
+          vec4 w = modelMatrix * vec4(position, 1.0);
+          vWorld = w.xyz; vNormalW = normalize(mat3(modelMatrix) * normal); vAlong = position.z / uLen;
+          gl_Position = projectionMatrix * viewMatrix * w;
+        }`,
+      fragmentShader: `
+        varying vec3 vWorld; varying vec3 vNormalW; varying float vAlong;
+        uniform float uOpacity; uniform vec3 uColor; uniform float uGround;
+        void main() {
+          vec3 V = normalize(cameraPosition - vWorld);
+          float rim = abs(dot(normalize(vNormalW), V));          // facing = through more of the volume
+          float body = pow(rim, 1.6);
+          float near = smoothstep(0.0, 0.08, vAlong);            // no hard lens disc
+          float far = pow(1.0 - clamp(vAlong, 0.0, 1.0), 1.7);   // fades to nothing down the road
+          float ground = smoothstep(0.0, 0.55, vWorld.y - uGround); // dissolve before touching the asphalt
+          float a = uOpacity * body * near * far * ground;
+          if (a < 0.002) discard;
+          gl_FragColor = vec4(uColor * a, a);
+        }`,
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+    });
     for (const sx of [-1, 1]) {
-      const vol = new THREE.Group();
-      // Crossed sheets along +Z (car forward): geo is XY, spin so long axis runs down the road
-      for (let i = 0; i < 2; i++) {
-        const geo = new THREE.PlaneGeometry(5.2, 36);
-        geo.rotateX(-Math.PI / 2); // → XZ plane, length along Z
-        const m = new THREE.Mesh(geo, mat);
-        m.rotation.z = i * Math.PI / 2;
-        m.position.z = 18;
-        vol.add(m);
-      }
-      const haze = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: softGlowTexture(255, 236, 200, 128), color: 0xffe8c8, blending: THREE.AdditiveBlending,
-        transparent: true, opacity: 0.35, depthWrite: false, fog: true,
-      }));
-      haze.scale.set(2.8, 2.8, 1); haze.position.set(0, 0, 1.2); vol.add(haze);
-      vol.position.x = sx * 0.55;
-      g.add(vol);
+      const m = new THREE.Mesh(geo, mat); m.frustumCulled = false; m.renderOrder = 5;
+      m.userData.side = sx; g.add(m);
     }
     g.visible = false;
     return g;
+  }
+
+  // car-space headlamp mounts (from the model's lamp flares, else from body dims)
+  lampMounts(car) {
+    if (car._lampMounts) return car._lampMounts;
+    const heads = (car.model.heads || []).filter((h) => h.userData.lamp === 'head' && h.userData.layer === 'core');
+    let pts = heads.map((h) => h.position.clone());
+    if (pts.length < 2) { const d = car.dims; pts = [new THREE.Vector3(-d.W * 0.32, 0.68, d.L / 2 - 0.15), new THREE.Vector3(d.W * 0.32, 0.68, d.L / 2 - 0.15)]; }
+    pts.sort((a, b) => a.x - b.x);
+    car._lampMounts = [pts[0], pts[pts.length - 1]];
+    return car._lampMounts;
   }
 
   // ---------------- helpers ----------------
@@ -1048,7 +1083,7 @@ export class Game {
         if (isPl || d2 < fxR2) this.vfx.carEffects(c, dt, this.world);
       }
     }
-    this.updateLights();
+    this._frameDt = dt; this.updateLights();
     this.maxSpeed = Math.max(this.maxSpeed, pl.speed);
     this.updateAudio(dtReal);
   }
@@ -1474,53 +1509,80 @@ export class Game {
       L[0].intensity = pc.flashA ? 70 * k : 0; L[1].intensity = pc.flashB ? 85 * k : 0;
     } else { L[0].intensity = L[1].intensity = 0; }
     // player headlights — dual beams + flood + body fill; much stronger at night
-    const night = !!(MAPS[this.world.mapId] && MAPS[this.world.mapId].night);
-    const q = this.settings.quality ?? 1;
-    const fx = Math.sin(pl.yaw), fz = Math.cos(pl.yaw);
-    const rx = fz, rz = -fx; // right vector
-    const y = pl.pos.y + 0.72;
-    const nose = 2.05;
-    const aim = 38;
-    // Low: one spot + fill. Med: dual spots, no flood. High: full rig.
-    const useDual = q >= 1, useFlood = q >= 2;
-    for (let i = 0; i < 2; i++) {
-      const sx = i === 0 ? -0.55 : 0.55;
-      const Lh = this.headlights[i];
-      const on = i === 0 || useDual;
-      Lh.intensity = on ? (night ? (q === 0 ? 70 : 100) : (q === 0 ? 10 : 16)) : 0;
-      if (on) {
-        Lh.position.set(pl.pos.x + fx * nose + rx * sx, y, pl.pos.z + fz * nose + rz * sx);
-        Lh.target.position.set(pl.pos.x + fx * aim + rx * sx * 0.35, pl.pos.y - 0.6, pl.pos.z + fz * aim + rz * sx * 0.35);
-      }
-    }
-    this.headFlood.intensity = useFlood ? (night ? 42 : 7) : 0;
-    if (useFlood) {
-      this.headFlood.position.set(pl.pos.x + fx * 1.6, y + 0.1, pl.pos.z + fz * 1.6);
-      this.headFlood.target.position.set(pl.pos.x + fx * 22, pl.pos.y - 1.4, pl.pos.z + fz * 22);
-    }
-    this.headFill.intensity = night ? (q === 0 ? 4 : 7) : (q === 0 ? 0.8 : 1.4);
-    this.headFill.position.set(pl.pos.x + fx * 1.4, pl.pos.y + 0.55, pl.pos.z + fz * 1.4);
-    const braking = pl.input && pl.input.brake > 0.1 && pl.vF > 1;
-    this.brakeGlow.intensity = q === 0 ? 0 : (braking ? (night ? 24 : 5) : (night ? 4 : 0));
-    this.brakeGlow.position.set(pl.pos.x - fx * 2.1, pl.pos.y + 0.55, pl.pos.z - fz * 2.1);
-    // volumetric beam volumes — skip on Low
-    const bg = this.beamGroup;
-    if (bg) {
-      bg.visible = q > 0;
-      if (q > 0) {
-        bg.position.set(pl.pos.x, pl.pos.y + 0.65, pl.pos.z);
-        bg.rotation.y = pl.yaw;
-        const op = night ? 0.65 : 0.1;
-        bg.traverse((o) => {
-          if (o.isMesh && o.material) o.material.opacity = op;
-          if (o.isSprite && o.material) o.material.opacity = night ? 0.42 : 0.07;
-        });
-      }
-    }
+    this.updateHeadlamps(pl, this._frameDt || 1 / 60);
     // siren edge glow on screen when close
     let near = 0, fl = 0;
     for (const c of cops.slice(0, 1)) { const d = c.pos.distanceTo(pl.pos); near = clamp(1 - d / 25, 0, 1); fl = c.flashA ? 1 : c.flashB ? -1 : 0; }
     this.sirenGlow = { r: fl > 0 ? 1 : 0, b: fl < 0 ? 1 : 0, a: near };
+  }
+
+  // ---- player headlamps ----
+  // Lamps sit at the car's real headlight positions and ride with the body (pitch/roll/suspension), aimed ~1% down
+  // (≈ legal low-beam aim) so the cut-off lands ~40 m ahead. Light is projected with a lamp pattern, shadows on High.
+  // H toggles high beam. Day: weak running lights only. Night: proper road illumination.
+  updateHeadlamps(pl, dt = 1 / 60) {
+    const night = !!(MAPS[this.world.mapId] && MAPS[this.world.mapId].night);
+    const q = this.settings.quality ?? 1;
+    const body = pl.model.body; body.updateWorldMatrix(true, false);
+    const M = body.matrixWorld;
+    const mounts = this.lampMounts(pl);
+    const fwd = new THREE.Vector3(0, 0, 1).transformDirection(M);
+    const up = new THREE.Vector3(0, 1, 0).transformDirection(M);
+    const high = this.highBeam && night;
+    // beam axis ≈ level: the pattern's hot spot already sits below the axis, so it lands ~15–40 m ahead (low beam)
+    const aimDown = high ? -0.004 : 0.006;
+    const useDual = q >= 1;
+    this._lampOn = damp(this._lampOn ?? 1, pl.wrecked ? 0 : 1, 6, dt);
+    const base = (night ? (high ? 1500 : 1000) : 20) * this._lampOn;
+    for (let i = 0; i < 2; i++) {
+      const Lh = this.headlights[i];
+      const on = i === 0 || useDual;
+      Lh.intensity = on ? base * (useDual ? 1 : 1.7) : 0;
+      if (!on) continue;
+      const p = mounts[useDual ? i : 0].clone();
+      if (!useDual) p.x = 0;
+      p.z += 0.05; p.applyMatrix4(M);
+      Lh.position.copy(p);
+      const toe = (i === 0 ? -1 : 1) * 0.02; // slight outward spread
+      const side = new THREE.Vector3().crossVectors(up, fwd).normalize();
+      Lh.target.position.copy(p).addScaledVector(fwd, 30).addScaledVector(up, -30 * aimDown).addScaledVector(side, -toe * 30);
+      Lh.target.updateMatrixWorld();
+      Lh.map = high ? this.highPattern : this.lowPattern;
+      Lh.angle = high ? 0.42 : 0.46;
+      Lh.distance = high ? 220 : 150;
+      // shadows only from the right lamp on High (one shadow map) — cars/poles cast real shadows into the beam
+      const sh = q >= 2 && night && i === 1;
+      if (Lh.castShadow !== sh) Lh.castShadow = sh;
+    }
+    // flood = short wide fill for the foreground and kerbs (stops the "tunnel vision" look)
+    const useFlood = q >= 2;
+    this.headFlood.intensity = useFlood ? (night ? 55 : 0) * this._lampOn : 0;
+    if (useFlood) {
+      const c = new THREE.Vector3(0, 0.62, pl.dims.L / 2 - 0.1).applyMatrix4(M);
+      this.headFlood.position.copy(c);
+      this.headFlood.target.position.copy(c).addScaledVector(fwd, 12).addScaledVector(up, -2.2);
+      this.headFlood.target.updateMatrixWorld();
+    }
+    // bounce light off the road onto the bumper/hood (stays below the bodywork, never a floating blob)
+    this.headFill.intensity = (night ? (q === 0 ? 3 : 5) : 0.6) * this._lampOn;
+    this.headFill.position.copy(new THREE.Vector3(0, 0.35, pl.dims.L / 2 + 1.6).applyMatrix4(M));
+    const braking = pl.input && pl.input.brake > 0.1 && pl.vF > 1;
+    this.brakeGlow.intensity = q === 0 ? 0 : (braking ? (night ? 24 : 5) : (night ? 4 : 0));
+    this.brakeGlow.position.copy(new THREE.Vector3(0, 0.55, -pl.dims.L / 2 - 0.3).applyMatrix4(M));
+    // volumetric shafts: only meaningful at night, in fog/haze; follow the lamps exactly
+    const bg = this.beamGroup;
+    if (bg) {
+      const show = q > 0 && night;
+      bg.visible = show;
+      if (show) {
+        this.beamUniforms.uOpacity.value = (high ? 0.16 : 0.11) * this._lampOn;
+        this.beamUniforms.uGround.value = this.world.heightAt(pl.pos.x, pl.pos.z);
+        bg.children.forEach((m, i) => {
+          m.position.copy(this.headlights[useDual ? i : 0].position);
+          m.lookAt(this.headlights[useDual ? i : 0].target.position);
+        });
+      }
+    }
   }
 
   updateAudio(dt) {

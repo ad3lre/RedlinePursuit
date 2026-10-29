@@ -210,6 +210,7 @@ function loop(now) {
   }
   if (app === 'game' && game.state !== 'ending' && game.state !== 'result') {
     if (input.hit('KeyZ')) hud.cycleMapZoom(); // minimap zoom: auto / near / far
+    if (input.hit('KeyH')) { game.highBeam = !game.highBeam; game.notify('LIGHTS', game.highBeam ? 'High beam' : 'Low beam', '#bfe0ff'); }
     rig.lookBack = input.k('KeyV', 'PadDown');
   } else rig.lookBack = false;
   const mh = $('mouse-hint'), needMh = lookAllowed() && settings.mouseLook === 2 && document.pointerLockElement !== canvas;
@@ -477,26 +478,7 @@ function garageSpin(dt) {
     camera.position.set(p.x + Math.sin(garageA) * r, p.y + 1.5 + Math.sin(garageA * 0.7) * 0.4, p.z + Math.cos(garageA) * r);
     camera.lookAt(p.x, p.y + 0.6, p.z);
     if (camera.fov !== 50) { camera.fov = 50; camera.updateProjectionMatrix(); }
-    const night = !!(MAPS[world.mapId] && MAPS[world.mapId].night);
-    const fx = Math.sin(garageCar.yaw), fz = Math.cos(garageCar.yaw);
-    const rx = fz, rz = -fx;
-    for (let i = 0; i < 2; i++) {
-      const sx = i === 0 ? -0.55 : 0.55;
-      const Lh = game.headlights[i];
-      Lh.intensity = night ? 70 : 22;
-      Lh.position.set(p.x + fx * 2.05 + rx * sx, p.y + 0.72, p.z + fz * 2.05 + rz * sx);
-      Lh.target.position.set(p.x + fx * 30 + rx * sx * 0.3, p.y - 0.5, p.z + fz * 30 + rz * sx * 0.3);
-    }
-    game.headFlood.intensity = night ? 28 : 8;
-    game.headFlood.position.set(p.x + fx * 1.6, p.y + 0.8, p.z + fz * 1.6);
-    game.headFlood.target.position.set(p.x + fx * 22, p.y - 1, p.z + fz * 22);
-    game.headFill.intensity = night ? 5 : 2;
-    game.headFill.position.set(p.x + fx * 1.2, p.y + 0.55, p.z + fz * 1.2);
-    if (game.beamGroup) {
-      game.beamGroup.visible = true;
-      game.beamGroup.position.set(p.x, p.y + 0.65, p.z);
-      game.beamGroup.rotation.y = garageCar.yaw;
-    }
+    game.updateHeadlamps(garageCar, dt); // same lamp rig as in-game (positions from the model's real headlights)
     if (garageCar.police) {
       const L = game.copLights; L[0].position.set(p.x, p.y + 2, p.z); L[1].position.copy(L[0].position);
       L[0].intensity = garageCar.flashA ? 45 : 0; L[1].intensity = garageCar.flashB ? 55 : 0;

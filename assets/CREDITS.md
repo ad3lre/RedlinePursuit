@@ -61,3 +61,8 @@ Short steady-RPM loops cut from these Wikimedia Commons recordings, all licensed
 ## Environment assets (Poly Haven, CC0 / public domain, no attribution required; listed for reference)
 - pine_tree_01 (bark + needle textures), jacaranda_tree (bark + leaf textures), boulder_01, rock_09, street_lamp_01 (Josh Dean), metal_trash_can, concrete_road_barrier: https://polyhaven.com
 - Changes: scan meshes decimated to ~0.3-2k triangles, textures resized to 128-512 px WebP; tree crowns are procedurally generated alpha-card foliage using the original textures. Sources are not committed (assets/env_src, 1.3 GB); fetch with `node tools/phdl.mjs <id>` and rebuild with `tools/envopt.mjs` / `tools/envcards.mjs`.
+
+## 2023 Koenigsegg Jesko Attack (`assets/models/jesko_hi.glb`, `jesko_lo.glb`)
+"2023 Koenigsegg Jesko Attack" by **ddiaz-design** on Sketchfab: https://sketchfab.com/3d-models/2023-koenigsegg-jesko-attack-18240b21b4d747c7b7e86a404c3a195a
+Licensed **CC BY-NC-SA 4.0** (https://creativecommons.org/licenses/by-nc-sa/4.0/): attribution required, **non-commercial use only**, derivatives must be shared under the same license.
+Changes: rescaled to 4.61 m, wheels regrouped into four spinning nodes, engine bay removed, meshes decimated (hi ~120k / lo ~59k triangles), textures resized to 1024 / 512 px WebP, meshopt-compressed (`tools/prepjesko.mjs`). Source is not committed.

@@ -16,6 +16,8 @@ import gt3Hi from '../assets/models/gt3rs_hi.glb';
 import gt3Lo from '../assets/models/gt3rs_lo.glb';
 import vitoHi from '../assets/models/vito_hi.glb';
 import vitoLo from '../assets/models/vito_lo.glb';
+import jeskoHi from '../assets/models/jesko_hi.glb';
+import jeskoLo from '../assets/models/jesko_lo.glb';
 import miniHi from '../assets/models/mini_hi.glb';
 import miniLo from '../assets/models/mini_lo.glb';
 import corollaHi from '../assets/models/corolla_hi.glb';
@@ -31,7 +33,7 @@ import pack_sport from '../assets/models/pack_sport.glb';
 import pack_suv from '../assets/models/pack_suv.glb';
 import pack_wagon from '../assets/models/pack_wagon.glb';
 
-const SOURCES = { 'gt3rs:hi': gt3Hi, 'gt3rs:lo': gt3Lo, 'cybertruck:hi': cyberHi, 'cybertruck:lo': cyberLo, 'vito:hi': vitoHi, 'vito:lo': vitoLo, 'mini:hi': miniHi, 'mini:lo': miniLo, 'corolla:hi': corollaHi, 'corolla:lo': corollaLo, 'ferrari:hi': ferrariHi, 'ferrari:lo': ferrariLo, 'concept:hi': conceptHi, 'concept:lo': conceptLo, 'compact:hi': pack_compact, 'coupe:hi': pack_coupe, 'hatchback:hi': pack_hatchback, 'minivan:hi': pack_minivan, 'offroad:hi': pack_offroad, 'pickup:hi': pack_pickup, 'sedan:hi': pack_sedan, 'sport:hi': pack_sport, 'suv:hi': pack_suv, 'wagon:hi': pack_wagon };
+const SOURCES = { 'gt3rs:hi': gt3Hi, 'gt3rs:lo': gt3Lo, 'cybertruck:hi': cyberHi, 'cybertruck:lo': cyberLo, 'vito:hi': vitoHi, 'vito:lo': vitoLo, 'jesko:hi': jeskoHi, 'jesko:lo': jeskoLo, 'mini:hi': miniHi, 'mini:lo': miniLo, 'corolla:hi': corollaHi, 'corolla:lo': corollaLo, 'ferrari:hi': ferrariHi, 'ferrari:lo': ferrariLo, 'concept:hi': conceptHi, 'concept:lo': conceptLo, 'compact:hi': pack_compact, 'coupe:hi': pack_coupe, 'hatchback:hi': pack_hatchback, 'minivan:hi': pack_minivan, 'offroad:hi': pack_offroad, 'pickup:hi': pack_pickup, 'sedan:hi': pack_sedan, 'sport:hi': pack_sport, 'suv:hi': pack_suv, 'wagon:hi': pack_wagon };
 // Per-model node/material mapping. rotY: radians to turn the model so its nose points +Z (game forward).
 // "Generic passenger car pack" (CC BY, Comrade1280): pre-split + oriented by tools/splitpack.mjs; keeps its own baked textures (no repaint).
 const PACK_DEF = { rotY: 0, wheelNode: /^wheel_(fl|fr|rl|rr)$/, frontWheel: /^wheel_f/, steer: null, paintMat: null, glassMat: /^Glass/, tailMat: null, headMat: null, keepTextures: true };
@@ -43,6 +45,8 @@ export const MODEL_DEFS = {
   gt3rs: { rotY: Math.PI, wheelNode: /^wheel_(fl|fr|rl|rr)$/, frontWheel: /^wheel_f/, tireMesh: /tire/i, steer: null, paintMat: null, glassMat: /^bw_lightglass/, tailMat: /^red\.004$/, headMat: null, keepTextures: true },
   // Mercedes Vito Utility Car (solid3DDD, CC BY), prepared by tools/prepvito.mjs: metres, nose +Z, wheels regrouped. Keeps its own textures.
   vito: { rotY: 0, wheelNode: /^wheel_(fl|fr|rl|rr)$/, frontWheel: /^wheel_f/, tireMesh: /tire/i, steer: /^steering_wheel$/, paintMat: null, glassMat: /^glass/i, tailMat: /^tailights$/, headMat: null, keepTextures: true },
+  // 2023 Koenigsegg Jesko Attack (ddiaz-design, CC BY-NC-SA 4.0), prepared by tools/prepjesko.mjs: metres, nose +Z, wheels regrouped. Keeps its own textures.
+  jesko: { rotY: 0, wheelNode: /^wheel_(fl|fr|rl|rr)$/, frontWheel: /^wheel_f/, tireMesh: /tyre|tire/i, steer: null, paintMat: null, glassMat: /glass/i, tailMat: /Light1/i, headMat: null, keepTextures: true },
   // Mini Cooper S (シRuletăシ, CC BY), prepared by tools/prepmini.mjs: metres, nose +Z, wheels regrouped. Keeps its own textures.
   mini: { rotY: 0, wheelNode: /^wheel_(fl|fr|rl|rr)$/, frontWheel: /^wheel_f/, tireMesh: /llanta|COOPER__rin/i, steer: null, paintMat: null, glassMat: /^vidrios$/i, tailMat: /^COOPER_luz2$/, headMat: /^COOPER_luz$/, keepTextures: true },
   // Toyota Corolla 2020 (ItsDiyor, CC BY), prepared by tools/prepcorolla.mjs: metres, nose +Z, wheels split out of the

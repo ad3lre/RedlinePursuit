@@ -197,6 +197,36 @@ export function softGlowTexture(r, g, b, size = 256) {
 }
 
 /** Elongated headlight volume: bright near tip, soft edges, fades along length. */
+/**
+ * Projected headlamp pattern for SpotLight.map (canvas top = up in the light's view).
+ * Low beam: hot spot just below the horizon, sharp horizontal cut-off with the classic 15° kick-up on the kerb side
+ * (right-hand traffic), wide soft foreground spread. High beam adds a long centred hot spot above the cut-off.
+ */
+export function headlampPattern(size = 256, high = false) {
+  const c = canvas(size, size), ctx = c.getContext('2d');
+  const img = ctx.createImageData(size, size);
+  const sm = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    const u = (x + 0.5) / size - 0.5, v = 0.5 - (y + 0.5) / size; // u: right +, v: up +
+    const r = Math.hypot(u, v);
+    const cone = 1 - sm(0.42, 0.5, r); // round lens edge
+    // cut-off: flat on the left, rising 15° to the right of centre
+    const cut = u > 0.02 ? Math.min(0.09, (u - 0.02) * Math.tan(15 * Math.PI / 180)) : 0;
+    const below = 1 - sm(cut - 0.012, cut + 0.012, v);
+    const hot = Math.exp(-((u / 0.24) ** 2 + ((v + 0.05) / 0.09) ** 2)); // concentrated just under the cut-off
+    const spread = Math.exp(-((u / 0.42) ** 2 + ((v + 0.18) / 0.26) ** 2)) * 0.8; // wide foreground wash
+    let a = below * (0.35 * hot + 0.65 * Math.max(hot, spread) + 0.12) + 0.04 * (1 - below) * Math.exp(-((u / 0.3) ** 2)); // floor so the whole lens area lights
+    if (high) a = Math.max(a, Math.exp(-((u / 0.16) ** 2 + (v / 0.12) ** 2)) * 1.1 + Math.exp(-((u / 0.34) ** 2 + (v / 0.22) ** 2)) * 0.35);
+    a = Math.min(1, a) * cone;
+    const i = (y * size + x) * 4;
+    img.data[i] = 255 * a; img.data[i + 1] = 247 * a; img.data[i + 2] = 232 * a; img.data[i + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  // linear data (a light mask), NOT sRGB: sRGB decoding squared the mid-tones and darkened the whole beam
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.NoColorSpace; t.needsUpdate = true;
+  return t;
+}
+
 export function beamTexture(size = 256) {
   const c = canvas(size, size), ctx = c.getContext('2d');
   const img = ctx.createImageData(size, size);
