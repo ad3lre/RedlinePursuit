@@ -105,6 +105,7 @@ const SUNO = [
   ['hate-that-you-luv-it', 'Hate That You Luv It', 0.7, 400],
   ['the-man-the-myth', 'The Man, The Myth, The Legend', 0.72, 382],
   ['hysterical', 'Hysterical', 0.68, 256],
+  ['adel-dabagh', 'Adel Dabagh', 0.65, 160],
 ].map(([id, title, e, d]) => ({
   id: 'suno-' + id, kind: 'suno', title, group: 'Playlist', e, d,
   url: 'audio/playlist/' + id + '.mp3',
