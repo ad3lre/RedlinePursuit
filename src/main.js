@@ -427,6 +427,15 @@ document.addEventListener('pointerup', (e) => { const r = e.target.closest && e.
 const unlockAudio = () => { if (audio.ready && audio.ctx.state === 'suspended') audio.ctx.resume(); };
 window.addEventListener('pointerdown', unlockAudio);
 window.addEventListener('keydown', unlockAudio);
+// Cmd/Ctrl + ←/→ — previous / next soundtrack track
+window.addEventListener('keydown', (e) => {
+  if (!(e.metaKey || e.ctrlKey)) return;
+  if (e.code !== 'ArrowLeft' && e.code !== 'ArrowRight') return;
+  e.preventDefault();
+  if (!audio.music?.playing) return;
+  if (e.code === 'ArrowRight') audio.music.next();
+  else audio.music.prev();
+}, true);
 window.addEventListener('gamepaddisconnected', () => { if (app === 'game') pause(true); });
 window.addEventListener('gamepadconnected', (e) => { input.pollPad(); const g = $('pad-badge'); g.textContent = '🎮 ' + (input.kind === 'ps' ? 'PlayStation' : input.kind === 'switch' ? 'Switch' : 'Xbox') + ' controller connected: D-pad/stick to select, ' + (input.kind === 'ps' ? '✕' : 'A') + ' to confirm'; g.classList.remove('hidden'); g.classList.remove('rfade'); void g.offsetWidth; g.classList.add('rfade'); });
 

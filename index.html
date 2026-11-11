@@ -44,6 +44,7 @@ button { font-family: inherit; cursor: pointer; }
 .mode:hover { background: linear-gradient(90deg, rgba(255,140,20,0.35), rgba(255,140,20,0.05)); transform: translateX(8px); }
 .mode.cop { border-left-color: var(--blue); } .mode.cop:hover { background: linear-gradient(90deg, rgba(40,130,255,0.35), rgba(40,130,255,0.05)); }
 .mode.free { border-left-color: #30e080; } .mode.free:hover { background: linear-gradient(90deg, rgba(40,220,120,0.3), rgba(40,220,120,0.05)); }
+.mode.speed { border-left-color: #00e8ff; } .mode.speed:hover { background: linear-gradient(90deg, rgba(0,200,255,0.35), rgba(0,200,255,0.05)); }
 .mode b { display: block; font-size: 26px; font-style: italic; letter-spacing: 0.05em; }
 .mode span { font-family: 'Noto Sans JP'; font-size: 13px; color: rgba(255,255,255,0.72); }
 .links { margin-top: auto; display: flex; gap: 12px; }
@@ -152,6 +153,8 @@ body.mouse-drag { cursor: grabbing; }
 @keyframes rfade { 0% { opacity: 0; } 8% { opacity: 1; } 75% { opacity: 1; } 100% { opacity: 0; } }
 #radio { position: absolute; left: 26px; bottom: 150px; max-width: 460px; font-size: 16px; font-weight: 600; background: linear-gradient(90deg, rgba(0,20,60,0.75), rgba(0,20,60,0)); border-left: 3px solid var(--blue); padding: 8px 14px; opacity: 0; }
 #radio .rtag { display: block; font-size: 11px; letter-spacing: 0.3em; color: #7fb8ff; }
+#now-playing { position: absolute; right: 26px; bottom: 150px; max-width: 280px; text-align: right; font-size: 13px; font-weight: 600; background: linear-gradient(270deg, rgba(20,10,0,0.7), rgba(20,10,0,0)); border-right: 3px solid var(--acc); padding: 6px 12px; opacity: 0; pointer-events: none; }
+#now-playing .ntag { display: block; font-size: 10px; letter-spacing: 0.28em; color: #ffb86a; }
 #abilities { position: absolute; left: 26px; bottom: 30px; display: flex; gap: 12px; }
 .ab { width: 110px; padding: 8px 10px; background: rgba(0,0,0,0.5); border: 1px solid var(--line); position: relative; overflow: hidden; }
 .ab::before { content: ''; position: absolute; left: 0; bottom: 0; height: 4px; width: var(--p, 100%); background: var(--blue); }
@@ -180,6 +183,7 @@ body.mouse-drag { cursor: grabbing; }
 .nav-mode .mode.pad-focus { background: linear-gradient(90deg, rgba(255,140,20,0.45), rgba(255,140,20,0.08)); transform: translateX(8px); }
 .nav-mode .mode.cop.pad-focus { background: linear-gradient(90deg, rgba(40,130,255,0.45), rgba(40,130,255,0.08)); }
 .nav-mode .mode.free.pad-focus { background: linear-gradient(90deg, rgba(40,220,120,0.4), rgba(40,220,120,0.08)); }
+.nav-mode .mode.speed.pad-focus { background: linear-gradient(90deg, rgba(0,200,255,0.45), rgba(0,200,255,0.08)); }
 .nav-mode .btn.pad-focus { background: var(--acc); color: #000; filter: drop-shadow(0 0 10px rgba(255,154,26,0.8)); }
 .nav-mode .btn.primary.pad-focus { filter: brightness(1.25) drop-shadow(0 0 14px rgba(255,90,40,0.9)); }
 .nav-mode .tog.pad-focus, .nav-mode .segs button.pad-focus, .nav-mode .arrowbtn.pad-focus { outline: 3px solid #fff; outline-offset: 2px; box-shadow: 0 0 14px rgba(255,154,26,0.9); }
@@ -206,13 +210,19 @@ button:focus { outline: none; }
 .namebox input { background: rgba(255,255,255,0.06); border: 1px solid var(--line); color: #fff; padding: 10px 14px; font: 700 20px Rajdhani, sans-serif; letter-spacing: 0.12em; text-transform: none; outline: none; width: 100%; box-sizing: border-box; clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px)); }
 .namebox input:focus { border-color: var(--acc); background: rgba(255,255,255,0.1); }
 .namebox small { color: #8a93a6; font-size: 12px; letter-spacing: 0.06em; }
-#spec-banner { position: fixed; left: 50%; top: 74px; transform: translateX(-50%); z-index: 60; display: flex; align-items: center; gap: 14px; padding: 8px 14px; background: rgba(8,10,14,0.82); border: 1px solid var(--line); color: #fff; font: 700 16px Rajdhani, sans-serif; letter-spacing: 0.1em; }
+#spec-banner { position: fixed; left: 50%; top: 74px; transform: translateX(-50%); z-index: 60; display: flex; align-items: center; gap: 14px; padding: 8px 14px; background: rgba(8,10,14,0.82); border: 1px solid var(--line); color: #fff; font: 700 16px Rajdhani, sans-serif; letter-spacing: 0.1em; backdrop-filter: blur(8px); }
 #spec-banner.hidden { display: none; }
-#spec-banner > div { display: flex; flex-direction: column; align-items: center; min-width: 260px; }
+#spec-banner > div { display: flex; flex-direction: column; align-items: center; min-width: 280px; }
 #spec-banner small { color: #ff6a6a; letter-spacing: 0.3em; font-size: 12px; }
 #spec-banner b { font-size: 24px; letter-spacing: 0.14em; }
 #spec-banner em { font-style: normal; font-size: 12px; color: #aab; letter-spacing: 0.06em; }
 #spec-banner button { background: transparent; color: #fff; border: 1px solid var(--line); width: 38px; height: 38px; font-size: 16px; cursor: pointer; }
+#spec-banner button:hover { border-color: var(--acc); color: var(--acc); }
+#net-pill { position: fixed; right: 18px; top: 74px; z-index: 55; padding: 6px 12px; background: rgba(8,10,14,0.75); border: 1px solid var(--line); color: #9ab; font: 700 12px Rajdhani, sans-serif; letter-spacing: 0.14em; pointer-events: none; }
+#net-pill.hidden { display: none; }
+#net-pill.bad { color: #ff6a6a; border-color: #ff6a6a; }
+#net-pill.warn { color: #ffb400; border-color: #ffb400; }
+#net-pill.ok { color: #3aff90; border-color: rgba(58,255,144,0.35); }
 </style>
 </head>
 <body>
@@ -245,6 +255,7 @@ button:focus { outline: none; }
     <div id="camlabel"></div>
     <div id="mouse-hint" class="hidden">Click to mouse-look (ESC to release)</div>
     <div id="radio" class="hidden"></div>
+    <div id="now-playing" class="hidden"></div>
     <div id="abilities" class="hidden">
       <div class="ab" id="ab-spike"><kbd>Q</kbd><b>SPIKE</b><span>Deploy spikes</span></div>
       <div class="ab" id="ab-emp"><kbd>E</kbd><b>EMP</b><span>Hold to lock</span><div id="emp-lockbar"><div id="emp-lock"></div></div></div>
@@ -267,14 +278,16 @@ button:focus { outline: none; }
     <div class="side">
       <div class="logo"><div class="l1">REDLINE</div><div class="l2">PURSUIT</div></div>
       <div class="h2">SELECT EVENT</div>
-      <button class="mode" data-mode="race"><b>HOT PURSUIT RACE</b><span>Race 3 rivals as a street racer. Shake off the police and take 1st place.</span></button>
+      <button class="mode" data-mode="race"><b>HOT PURSUIT RACE</b><span>Race rivals as a street racer. High heat triggers BLACKOUT — tanks & helis join the chase.</span></button>
       <button class="mode cop" data-mode="cop"><b>INTERCEPTOR</b><span>Play as the police. Bust 4 illegal racers with spike strips and EMP.</span></button>
-      <button class="mode free" data-mode="free"><b>FREE RUN</b><span>Roam the huge map freely. If a patrol spots you, escape.</span></button>
+      <button class="mode free" data-mode="free"><b>FREE RUN</b><span>Roam freely. Escape patrols — push heat to 4+ for BLACKOUT military response.</span></button>
+      <button class="mode speed" data-mode="speed"><b>REDLINE SPEEDWAY</b><span>Long flat oval. No civilians. Race rivals, friends & cops in a pure speed pack.</span></button>
       <div class="h2" style="margin-top:22px">MAP</div>
       <div class="segs mapsel" style="justify-content:flex-start;margin-bottom:6px;flex-wrap:wrap">
         <button class="mapbtn" data-map="tokyo">TOKYO NIGHT 東京</button>
         <button class="mapbtn" data-map="stuttgart">STUTTGART DUSK</button>
         <button class="mapbtn" data-map="coast">REDVIEW COAST</button>
+        <button class="mapbtn" data-map="speedway">REDLINE SPEEDWAY</button>
       </div>
       <div id="map-note" class="padhint" style="margin-top:2px"></div>
       <div class="namebox"><label for="player-name">YOUR NAME</label><input id="player-name" type="text" maxlength="14" autocomplete="off" spellcheck="false" placeholder="Pick a name"><small>Shown to other players online. Letters, numbers, space and - . ! ?</small></div>
@@ -314,11 +327,12 @@ button:focus { outline: none; }
       <div><kbd>E</kbd></div><div>[Police] Hold to EMP lock-on the racer ahead</div>
       <div><kbd>R</kbd></div><div>Respawn on track (reset)</div>
       <div><kbd>M</kbd></div><div>Music on/off</div>
+      <div><kbd>⌘</kbd><kbd>←</kbd><kbd>→</kbd></div><div>Previous / next song (Ctrl on Windows/Linux)</div>
       <div><kbd>ESC</kbd><kbd>P</kbd></div><div>Pause</div>
       <div>Gamepad</div><div>RT Accelerate / LT Brake / Left stick Steer / Right stick Look around / A (✕) Nitro / X·B (□·○) Drift / Y (△) Camera / LB Spikes / RB EMP / ↓ Look behind / START Pause / BACK Reset / START or Y: GO (room owner while players are ready). Vibration on impacts, landings, nitro and spikes (Settings to turn off).</div>
       <div>Menus</div><div>D-pad / left stick to select, A to confirm, B to go back (left/right adjusts sliders)</div>
     </div>
-    <p class="jp" style="margin-top:16px;font-size:13px;opacity:.75">Rules: during a pursuit, if police surround you and you slow down, the BUSTING meter fills and you get arrested. Ram patrol cars to damage them and score a takedown. As your heat level rises, backup, roadblocks and spike strips appear.</p>
+    <p class="jp" style="margin-top:16px;font-size:13px;opacity:.75">Rules: during a pursuit, if police surround you and you slow down, the BUSTING meter fills and you get arrested. Ram patrol cars to damage them and score a takedown. As your heat level rises, backup, roadblocks and spike strips appear. BLACKOUT PROTOCOL adds main battle tanks and chase helicopters with spotlights and suppressing fire.</p>
     <div class="btnrow"><button class="btn" id="btn-controls-back">BACK</button></div></div></div>
 
   
@@ -330,6 +344,7 @@ button:focus { outline: none; }
 </div>
 <div id="wait-banner" class="hidden"></div>
 <div id="spec-banner" class="hidden"><button id="spec-prev">&#9664;</button><div><small>SPECTATING</small><b id="spec-name"></b><em id="spec-sub"></em></div><button id="spec-next">&#9654;</button></div>
+<div id="net-pill" class="hidden">ONLINE</div>
 <button id="btn-go" class="btn primary hidden">GO</button>
 <div id="sound-hint" class="hidden">🔇 Click the screen or press a key to enable sound (browsers may not start audio from a gamepad alone)</div>
 <div id="pad-badge" class="hidden"></div>

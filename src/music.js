@@ -595,6 +595,34 @@ export class Music {
     this.timer = setInterval(() => this._pump(), 25);
   }
 
+  /** Skip to next track (manual). */
+  next() {
+    if (!this.playing || !this.ctx || this.switching) return;
+    this._killPending();
+    this._advance();
+  }
+
+  /** Jump back one track from history. */
+  prev() {
+    if (!this.playing || !this.ctx || this.switching) return;
+    if (this.history.length < 2) return;
+    const prevId = this.history[this.history.length - 2];
+    const pool = this._pool();
+    const def = pool.find((d) => d.id === prevId);
+    if (!def) return;
+    const curId = this.cur?.def?.id;
+    if (this.mix === 'playlist' && curId) this._bag.unshift(curId);
+    // drop current + prev; _advance will re-push prev
+    this.history.pop();
+    this.history.pop();
+    this._killPending();
+    let tr;
+    try { tr = this._make(def); } catch { return; }
+    this.pending = { def, tr, ready: isBed(def.kind) ? tr.ready() : Promise.resolve() };
+    this.pending.ready.catch(() => {});
+    this._advance();
+  }
+
   stop() {
     this.playing = false;
     clearInterval(this.timer); this.timer = 0;

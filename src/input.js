@@ -19,7 +19,13 @@ export class Input {
     this.navDir = null; this.navNext = 0;
     this.lastPadInput = 0;
     this.steerSmooth = 0;
+    this.touchSteer = 0; // analog on-screen steer from TouchControls (−1…1, + = left)
     window.addEventListener('keydown', (e) => {
+      // Cmd/Ctrl + ←/→ is music skip — don't steer / menu-navigate with it
+      if ((e.metaKey || e.ctrlKey) && (e.code === 'ArrowLeft' || e.code === 'ArrowRight')) {
+        e.preventDefault();
+        return;
+      }
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
       if (!this.keys.has(e.code)) this.pressed.add(e.code);
       this.keys.add(e.code);
@@ -89,6 +95,12 @@ export class Input {
     brake = this.k('KeyS') ? 1 : 0;
     let handbrake = this.k('Space') ? 1 : 0;
     let nitro = this.k('ShiftLeft', 'ShiftRight', 'KeyN') ? 1 : 0;
+    // On-screen analog pad (touch): same sign convention as keyboard (+ = left)
+    if (typeof this.touchSteer === 'number' && Math.abs(this.touchSteer) > 0.02) {
+      const ts = Math.max(-1, Math.min(1, this.touchSteer));
+      steer = Math.sign(ts) * Math.pow(Math.abs(ts), 1.15);
+      this.steerSmooth = steer;
+    }
     if (this.padCount) {
       const ax = this.padAxes[0], D = this.deadzone;
       if (Math.abs(ax) > D) steer = -Math.sign(ax) * ((Math.abs(ax) - D) / (1 - D)) ** 1.4;
