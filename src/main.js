@@ -15,12 +15,17 @@ import { MS_TO_KMH } from './units.js';
 import { Net } from './net.js';
 import { loadCarAssets } from './carAssets.js';
 import { loadEnvAssets } from './envAssets.js';
+import { loadMilitaryAssets } from './militaryAssets.js';
 
 const $ = (id) => document.getElementById(id);
-const DEFAULTS = { camMode: 0, fov: 65, shake: 0, speedFx: true, centerDot: false, mouseLook: 1, mouseSens: 1, mouseInvY: false, mouseReturn: true, cinematic: true, voice: true, quality: 1, master: 0.8, music: 0.6, sfx: 0.9, padRumble: true, padDeadzone: 0.12, padLookSens: 1 };
+const DEFAULTS = { camMode: 0, fov: 65, shake: 0, speedFx: true, centerDot: false, mouseLook: 1, mouseSens: 1, mouseInvY: false, mouseReturn: true, cinematic: true, voice: true, quality: 1, master: 0.8, music: 0.6, sfx: 0.9, mix: 'playlist', padRumble: true, padDeadzone: 0.12, padLookSens: 1 };
 let settings = { ...DEFAULTS };
 try { const s = JSON.parse(localStorage.getItem('redline-settings') || '{}'); settings = { ...DEFAULTS, ...s }; } catch (e) { /* ignore */ }
+// Shuffled Suno playlist by default; migrate legacy mixes onto playlist once
+if (settings.mix === 'all' || !['playlist', 'synth', 'radio'].includes(settings.mix)) settings.mix = 'playlist';
+if (!settings.playlistV1) { settings.mix = 'playlist'; settings.playlistV1 = true; }
 const saveSettings = () => { try { localStorage.setItem('redline-settings', JSON.stringify(settings)); } catch (e) { /* ignore */ } };
+saveSettings();
 
 // ---------- renderer ----------
 const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance', stencil: false });
@@ -97,23 +102,43 @@ document.querySelectorAll('.mapbtn').forEach((b) => {
 function applyQuality() {
   const q = settings.quality;
   const dpr = window.devicePixelRatio || 1;
-  // Low: 0.75×, Med: ≤1.25, High: ≤1.5 (2× was mostly waste on 1080p+ for this scene)
-  renderer.setPixelRatio(q === 0 ? Math.min(dpr, 1) * 0.75 : q === 1 ? Math.min(dpr, 1.25) : Math.min(dpr, 1.5));
+  // Low: 0.7×, Med: ≤1.1, High: ≤1.35 (city fill-rate is the ceiling long before native DPR)
+  // Med caps at 1× — city fill-rate dominates before retina DPR helps
+  renderer.setPixelRatio(q === 0 ? Math.min(dpr, 1) * 0.7 : q === 1 ? Math.min(dpr, 1) : Math.min(dpr, 1.35));
   renderer.shadowMap.enabled = q > 0;
   renderer.shadowMap.type = q >= 2 ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
   if (world.sunLight) {
     world.sunLight.castShadow = q > 0;
-    const ms = q >= 2 ? 2048 : 1024;
+    const ms = q >= 2 ? 2048 : q === 1 ? 768 : 512;
     if (world.sunLight.shadow.mapSize.x !== ms) { world.sunLight.shadow.mapSize.set(ms, ms); if (world.sunLight.shadow.map) { world.sunLight.shadow.map.dispose(); world.sunLight.shadow.map = null; } }
+    // Tighter ortho frustum = denser shadow texels around the player + less casters in the map
+    const S = q >= 2 ? 95 : q === 1 ? 64 : 65;
+    Object.assign(world.sunLight.shadow.camera, { left: -S, right: S, top: S, bottom: -S });
+    world.sunLight.shadow.camera.updateProjectionMatrix();
+    world._shadowSnap = (2 * S) / ms;
   }
+  // Building boxes into the sun map: High only — Med/Low keep car/tree contact shadows without the skyscraper pass
+  if (world.buildingIM) world.buildingIM.castShadow = q >= 2;
+  // Cornice / plinth / HVAC / piers — High only (several full skyline opaque passes)
+  if (world.detailIMs) for (const im of world.detailIMs) im.visible = q >= 2;
   // Tree hi-LOD radius: full foliage cards are expensive in the shadow + opaque passes
-  world.treeLodDist = q === 0 ? 160 : q === 1 ? 240 : 330;
+  world.treeLodDist = q === 0 ? 80 : q === 1 ? 90 : 240;
+  if (world.flare) world.flare.visible = q >= 2; // lensflare is a fullscreen additive pass — High only
   if (post) {
     post.setQuality(q);
     const samples = q >= 2 ? 4 : 0; // MSAA only on High; Med/Low skip the resolve cost
     for (const rt of [post.composer.renderTarget1, post.composer.renderTarget2]) { if (rt.samples !== samples) { rt.samples = samples; rt.dispose(); } }
     onResize();
   }
+  if (vfx?.setQuality) vfx.setQuality(q);
+  // Tighter fog on Low/Med hides distant draw work and softens aliasing on the skyline
+  if (world.scene?.fog) {
+    const base = world.mapId === 'tokyo' ? 0.00034 : 0.00028;
+    world.scene.fog.density = q === 0 ? base * 1.7 : q === 1 ? base * 1.45 : base;
+  }
+  // Shorter far plane = less skyline fill; still covers a full chase
+  const far = q === 0 ? 3600 : q === 1 ? 4000 : 11000;
+  if (Math.abs(camera.far - far) > 1) { camera.far = far; camera.updateProjectionMatrix(); }
 }
 function onResize() {
   const w = window.innerWidth, h = window.innerHeight;
@@ -129,6 +154,7 @@ async function boot() {
   txt.textContent = 'Loading environment assets…'; await loadEnvAssets();
   await world.build((p, t) => { bar.style.width = `${Math.round(p * 100)}%`; txt.textContent = t; });
   txt.textContent = 'LOADING CAR MODELS'; await loadCarAssets();
+  txt.textContent = 'LOADING MILITARY ASSETS'; await loadMilitaryAssets();
   post = new Post(renderer, scene, camera);
   applyQuality();
   game = new Game({ renderer, scene, camera, world, audio, input, settings, rig, vfx, hud });
@@ -191,7 +217,7 @@ function loop(now) {
     if (perfT > 8) {
       perfChecked = true;
       const fps = perfN / perfT;
-      if (fps < 38 && settings.quality > 0) { settings.quality--; applyQuality(); saveSettings(); game.notify('Graphics auto-adjusted', `Avg ${Math.round(fps)} FPS → quality "${['Low', 'Medium', 'High'][settings.quality]}"`, '#aaaaaa'); }
+      if (fps < 45 && settings.quality > 0) { settings.quality--; applyQuality(); saveSettings(); game.notify('Graphics auto-adjusted', `Avg ${Math.round(fps)} FPS → quality "${['Low', 'Medium', 'High'][settings.quality]}"`, '#aaaaaa'); }
     }
   }
   time += dt;
@@ -221,51 +247,58 @@ function loop(now) {
   const spec = app === 'game' && game.spectating ? game.specTarget() : null;
   if (spec && (rig.mode === 'cockpit' || rig.mode === 'hood')) rig.setMode(0); // first-person views belong to your own car
   if (app === 'game' && game.spectating && game.state === 'playing') {
-    if (input.hit('KeyE', 'ArrowRight', 'KeyD', 'PadRB')) game.specCycle(1);
-    if (input.hit('KeyQ', 'ArrowLeft', 'KeyA', 'PadLB')) game.specCycle(-1);
+    if (input.hit('KeyE', 'ArrowRight', 'PadRB')) game.specCycle(1);
+    if (input.hit('KeyQ', 'ArrowLeft', 'PadLB')) game.specCycle(-1);
   }
-  rig.update(dt, app === 'garage' ? null : (spec || pl), time);
+  const camCar = app === 'garage' ? null : (spec || pl);
+  rig.update(dt, camCar, time);
   updateSpecBanner(spec);
-  { const nn = (rig.mode === 'cockpit' || rig.mode === 'hood') && app === 'game' ? 0.12 : 0.45; if (Math.abs(camera.near - nn) > 1e-3) { camera.near = nn; camera.updateProjectionMatrix(); } } // 0.1 m near over a 14 km range gave ~cm-level depth jitter on far road/ground
+  updateNetPill();
+  { const nn = (rig.mode === 'cockpit' || rig.mode === 'hood') && app === 'game' ? 0.12 : 0.45; if (Math.abs(camera.near - nn) > 1e-3) { camera.near = nn; camera.updateProjectionMatrix(); } } // 0.1 m near over a 14 km space gave ~cm-level depth jitter on far road/ground
   if (app === 'game' || app === 'paused' || app === 'result') hud.update(dt, game, camera, world, settings);
-  // sun follows camera focus
-  if (pl) center.copy(pl.pos); else center.copy(camera.position);
+  // sun follows camera focus (spectatee when watching)
+  if (camCar) center.copy(camCar.pos); else if (pl) center.copy(pl.pos); else center.copy(camera.position);
   world.updateSun(center);
   world.update(dt, time);
   vfx.update(app === 'paused' ? 0 : dt * (game.timeScale || 1));
   vfx.setScale(renderer.domElement.height / (2 * Math.tan((camera.fov * Math.PI) / 360)));
   // post fx uniforms
   const u = post.u;
-  const inGame = app === 'game' && pl && !game.demo;
+  const fxCar = camCar || pl;
+  const inGame = app === 'game' && fxCar && !game.demo;
   const feel = game?.feel;
-  const sp = inGame ? pl.speed : 0;
+  const sp = inGame ? fxCar.speed : 0;
+  // city speeds already count: ~100 km/h ≈ 0.4 of full radial/streak effect
   const speedAmt = settings.speedFx && inGame
-    ? clamp((sp - 28) / 55, 0, 1) * (rig.mode === 'cockpit' || rig.mode === 'hood' ? 0.65 : 1) + (feel?.speedBias || 0)
+    ? clamp((sp - 12) / 40, 0, 1) * (rig.mode === 'cockpit' || rig.mode === 'hood' ? 0.65 : 1) + (feel?.speedBias || 0)
     : 0;
   u.uSpeed.value = lerp(u.uSpeed.value, clamp(speedAmt, 0, 1.35), 0.14);
   u.uBlur.value = settings.speedFx ? 1 + (feel?.blurKick || 0) : 0;
-  nitroFx = lerp(nitroFx, inGame && pl.nitroActive ? 1 : 0, 0.14);
+  nitroFx = lerp(nitroFx, inGame && fxCar.nitroActive ? 1 : 0, 0.14);
   u.uNitro.value = Math.min(1.4, nitroFx + (feel?.nitroBoost || 0));
   {
     const night = !!(MAPS[world.mapId] && MAPS[world.mapId].night);
     u.uNight.value = night ? 1 : 0;
-    post.bloom.threshold = night ? 0.55 : 0.92;
-    post.bloom.radius = night ? 0.72 : 0.5;
-    post.bloom.strength = (night ? 0.78 : 0.5) + 0.28 * nitroFx + (feel?.bloomKick || 0);
+    if (post.bloom.enabled) {
+      post.bloom.threshold = night ? 0.72 : 0.92;
+      post.bloom.radius = night ? 0.62 : 0.5;
+      post.bloom.strength = (night ? 0.55 : 0.5) + 0.28 * nitroFx + (feel?.bloomKick || 0);
+    }
   }
   { // sun position on screen for the shaft pass (only while the sun is in front of the camera)
     const sd = game.world.sunDir; _sunV.copy(camera.position).addScaledVector(sd, 2000).project(camera);
     const vis = _sunV.z < 1 && Math.abs(_sunV.x) < 1.6 && Math.abs(_sunV.y) < 1.6 ? 1 : 0;
     u.uSun.value.set(_sunV.x * 0.5 + 0.5, _sunV.y * 0.5 + 0.5, lerp(u.uSun.value.z, vis * (inGame || app === 'menu' ? 1 : 0.6), 0.1));
   }
-  const low = inGame && pl.health < 0.25 ? 0.25 + Math.sin(time * 6) * 0.15 : 0;
-  u.uDamage.value = inGame ? Math.max(hud.dmgFlash * 0.8, low) : 0;
+  const low = inGame && !game.spectating && pl && pl.health < 0.25 ? 0.25 + Math.sin(time * 6) * 0.15 : 0;
+  u.uDamage.value = inGame && !game.spectating ? Math.max(hud.dmgFlash * 0.8, low) : 0;
   const sg = inGame && game.sirenGlow;
   u.uSiren.value.set(sg ? sg.r : 0, sg ? sg.b : 0, sg ? sg.a : 0);
-  post.mb.strength = settings.speedFx && (app === 'game' || app === 'paused' ? !!pl && !game.demo : false) && app !== 'paused'
-    ? 1 + Math.min(0.55, feel?.blurKick || 0)
+  const mbOn = settings.speedFx && (app === 'game' || app === 'paused' ? !!fxCar && !game.demo : false) && app !== 'paused';
+  post.mb.strength = mbOn
+    ? 0.35 + 1.1 * clamp(speedAmt, 0, 1) + Math.min(0.55, feel?.blurKick || 0)
     : 0;
-  if (pl) { post.mb.u.uCar.value.set(pl.pos.x, pl.pos.y + 0.8, pl.pos.z); post.mb.u.uCarR.value = Math.max(pl.dims.L * 0.5, pl.dims.W) + 0.9; }
+  if (fxCar) { post.mb.u.uCar.value.set(fxCar.pos.x, fxCar.pos.y + 0.8, fxCar.pos.z); post.mb.u.uCarR.value = Math.max(fxCar.dims.L * 0.5, fxCar.dims.W) + 0.9; }
   u.uMB.value = post.mb.enabled && post.mb.strength ? 1 : 0;
   post.draw(dt);
   input.endFrame();
@@ -277,7 +310,7 @@ function handleGlobalKeys() {
     const pw = window.prompt('Host password:'); input.keys.clear();
     if (pw) net.send({ t: 'claim', pw });
   }
-  if (input.hit('KeyG', 'PadStart', 'PadY') && waiting && isOwner()) goNow();
+  if (input.hit('KeyG', 'PadStart', 'PadY') && waiting && isOwner() && selMode !== 'speed') goNow();
   const scr = visibleScreen();
   if (app === 'title') {
     if (input.hit('Enter', 'Space', 'PadA', 'PadB', 'PadX', 'PadY', 'PadStart')) enterMenu();
@@ -398,21 +431,44 @@ window.addEventListener('gamepaddisconnected', () => { if (app === 'game') pause
 window.addEventListener('gamepadconnected', (e) => { input.pollPad(); const g = $('pad-badge'); g.textContent = '🎮 ' + (input.kind === 'ps' ? 'PlayStation' : input.kind === 'switch' ? 'Switch' : 'Xbox') + ' controller connected: D-pad/stick to select, ' + (input.kind === 'ps' ? '✕' : 'A') + ' to confirm'; g.classList.remove('hidden'); g.classList.remove('rfade'); void g.offsetWidth; g.classList.add('rfade'); });
 
 // ---------- UI flow ----------
+function updateNetPill() {
+  const el = $('net-pill'); if (!el) return;
+  const live = !!game.multi && (app === 'game' || app === 'paused') && !!net.inSession;
+  el.classList.toggle('hidden', !live);
+  if (!live) return;
+  el.classList.remove('ok', 'warn', 'bad');
+  if (!net.connected || net._resuming) { el.classList.add('bad'); el.textContent = 'RECONNECTING…'; return; }
+  const ms = Math.round((net.rtt || 0) * 1000);
+  const q = net.quality ?? 1;
+  if (q > 0.7) { el.classList.add('ok'); el.textContent = `ONLINE · ${ms} ms`; }
+  else if (q > 0.35) { el.classList.add('warn'); el.textContent = `WEAK · ${ms} ms`; }
+  else { el.classList.add('bad'); el.textContent = `UNSTABLE · ${ms} ms`; }
+}
 function updateSpecBanner(spec) {
   const el = $('spec-banner'); const on = app === 'game' && !!game.spectating && game.state === 'playing';
   el.classList.toggle('hidden', !on);
   if (!on) return;
   $('spec-name').textContent = spec ? spec.name : '-';
   const n = game.aliveHumans().length;
-  $('spec-sub').textContent = `${n} player${n === 1 ? '' : 's'} still in  -  event ends when everyone is out  -  Q / E to switch`;
+  const rttMs = net.connected ? Math.round((net.rtt || 0) * 1000) : 0;
+  const lag = spec?.ai?.lagging;
+  const q = net.quality ?? 1;
+  const link = !net.connected ? 'OFFLINE' : lag ? 'UNSTABLE' : q > 0.7 ? `${rttMs} ms` : q > 0.35 ? `WEAK · ${rttMs} ms` : `BAD · ${rttMs} ms`;
+  $('spec-sub').textContent = `${n} still racing  ·  ${link}  ·  Q / E switch  ·  C camera`;
 }
 $('spec-prev').onclick = () => game.specCycle(-1);
 $('spec-next').onclick = () => game.specCycle(1);
 function show(id) { for (const p of ['title', 'menu', 'garage', 'pause', 'result', 'settings', 'controls']) $(p).classList.toggle('hidden', p !== id); if (id) delete navIdx[id]; document.querySelectorAll('.pad-focus').forEach((e) => e.classList.remove('pad-focus')); }
+function bindNowPlaying() {
+  if (!audio.music || audio.music._npBound) return;
+  audio.music._npBound = true;
+  audio.music.onTrack((t) => hud.nowPlaying(t));
+  hud.nowPlaying(audio.music.nowPlaying());
+}
 function enterMenu() {
   audio.init();
   audio.settings = settings; audio.applyVolumes();
-  if (audio.music) { audio.music.start(); audio.music.setLevel(0); }
+  if (audio.music) { audio.music.setMix(settings.mix); audio.music.start(); audio.music.setLevel(0); bindNowPlaying(); }
   audio.click();
   app = 'menu'; show('menu');
   if (!game.demo) { game.start('demo'); demoShotT = 0; }
@@ -436,8 +492,19 @@ function flushGaragePool() { garagePool.clear(); garageCar = null; }
 function enterGarage(mode) {
   selMode = mode; audio.click();
   app = 'garage'; show('garage');
-  $('garage-mode').textContent = { race: 'HOT PURSUIT RACE', cop: 'INTERCEPTOR', free: 'FREE RUN' }[mode];
-  $('garage-sub').textContent = { race: 'Join as a racer. Shake off the police and finish 1st.', cop: 'Roll out as the police. Bust all 4 illegal racers.', free: 'Roam the huge map freely. If a patrol spots you, escape.' }[mode];
+  $('garage-mode').textContent = { race: 'HOT PURSUIT RACE', cop: 'INTERCEPTOR', free: 'FREE RUN', speed: 'REDLINE SPEEDWAY' }[mode];
+  $('garage-sub').textContent = {
+    race: 'Join as a racer. Shake off the police and finish 1st. High heat triggers BLACKOUT armor.',
+    cop: 'Roll out as the police. Bust 4 illegal racers.',
+    free: 'Roam freely. Escape patrols — push heat high enough and BLACKOUT tanks & helis drop in.',
+    speed: 'Long flat oval. No civilians. Race rivals, friends & cops in a pure speed pack.',
+  }[mode];
+  // Speedway mode always loads the dedicated oval map
+  if (mode === 'speed') {
+    selMap = 'speedway';
+    document.querySelectorAll('.mapbtn').forEach((x) => x.classList.toggle('on', x.dataset.map === 'speedway'));
+    if (world.mapId !== 'speedway' && !mapSwitching) switchMap('speedway');
+  }
   flushGaragePool();
   game.clear();
   // custom GLBs (GT3 ~286 meshes, Mini ~251) hitch hard when each new preview rebuilds + fills the shadow map
@@ -464,7 +531,7 @@ function selectCar(i) {
   const spec = PLAYER_CARS[selCar];
   $('car-name').textContent = (police ? 'POLICE ' : '') + spec.name;
   $('car-desc').textContent = spec.desc;
-  const stats = [['Top speed', spec.top / 96], ['Acceleration', spec.accel / 19], ['Handling', (spec.grip * spec.steer) / 9.5], ['Durability / Ramming', spec.armor * spec.mass / 2.2]];
+  const stats = [['Top speed', spec.top / 141.7], ['Acceleration', spec.accel / 22], ['Handling', (spec.grip * spec.steer) / 11.2], ['Durability / Ramming', spec.armor * spec.mass / 2.2]];
   $('car-stats').innerHTML = stats.map(([n, v]) => `<div class="st"><span>${n}</span><div class="sb"><i style="width:${Math.round(clamp(v, 0.1, 1) * 100)}%"></i></div></div>`).join('') + `<div class="st topspeed"><span>TOP SPEED</span><b>${Math.round(spec.top * MS_TO_KMH)} km/h</b></div>`;
   $('car-idx').textContent = `${selCar + 1} / ${PLAYER_CARS.length}`;
   audio.hover();
@@ -487,13 +554,18 @@ function garageSpin(dt) {
 }
 function startGame() {
   if (net.connected && room) { audio.click(); if (!waiting) { waiting = true; sendReady(); } refreshWait(); return; }
-  // was online before but the socket is down right now: wait for the reconnect instead of silently starting a
-  // separate solo world (players thought they were together but were each in their own game)
-  if (net._everOpened) { audio.click(); waiting = true; setWait('Reconnecting to the room…'); net.connect().then(() => { net.send({ t: 'hello', name: mpName }); if (waiting) { sendReady(); refreshWait(); } }).catch(() => {}); return; }
+  // Never silently fall into a solo world after we've touched the relay — that was the classic "split lobby"
+  if (net._everOpened || net.wantSeat || net.id) {
+    audio.click(); waiting = true; net.wantSeat = true;
+    setWait('Reconnecting to the room…');
+    net.connect().then(() => { net.send({ t: 'hello', name: mpName }); if (waiting) { sendReady(); refreshWait(); } }).catch(() => { setWait('Still reconnecting…'); });
+    return;
+  }
   startLocal();
 }
 async function startLocal() {
   audio.click();
+  if (selMode === 'speed') selMap = 'speedway';
   if (mapSwitching) await mapSwitching;
   // Guarantee the selected map is built before countdown (UI can race ahead of setMap)
   if (selMap && MAPS[selMap] && (selMap !== world.mapId || world.root.children.length < 50)) {
@@ -556,7 +628,7 @@ function showResult(r) {
   $('res-title').className = good ? 'good' : 'bad';
   const rows = [];
   $('btn-retry').textContent = 'RETRY';
-  if (selMode === 'race') { rows.push(['Position', r.reason === 'finish' ? `${r.place} / ${r.total || 4}` : 'DNF'], ['Time', fmtTime(r.time)]); }
+  if (selMode === 'race' || selMode === 'speed') { rows.push(['Position', r.reason === 'finish' ? `${r.place} / ${r.total || 4}` : 'DNF'], ['Time', fmtTime(r.time)]); }
   if (selMode === 'cop') { rows.push(['Busted', `${r.busted} / 4`], ['Racers escaped', r.escaped], ['Time', fmtTime(r.time)]); const medal = r.busted >= 4 ? 'GOLD' : r.busted >= 3 ? 'SILVER' : r.busted >= 2 ? 'BRONZE' : '-'; rows.push(['Rating', medal]); }
   if (selMode === 'free') { rows.push(['Bounty', r.bounty.toLocaleString()], ['Escapes', r.escapes], ['Drive time', fmtTime(r.time)], ['Max heat', r.heat]); }
   rows.push(['Takedowns', r.takedowns], ['Top speed', `${Math.round(r.maxSpeed)} km/h`]);
@@ -585,6 +657,7 @@ function buildSettings() {
     { k: 'master', label: 'Master volume', type: 'range', min: 0, max: 1, step: 0.05 },
     { k: 'music', label: 'Music volume', type: 'range', min: 0, max: 1, step: 0.05 },
     { k: 'sfx', label: 'SFX volume', type: 'range', min: 0, max: 1, step: 0.05 },
+    { k: 'mix', label: 'Soundtrack mix', type: 'sel', vals: [['playlist', 'Playlist'], ['synth', 'Pursuit'], ['radio', 'Radio (Echo)']] },
   ];
   el.innerHTML = '';
   for (const o of opts) {
@@ -616,6 +689,7 @@ function buildSettings() {
 function changed(k) {
   saveSettings();
   audio.settings = settings; audio.applyVolumes();
+  if (k === 'mix' && audio.music) audio.music.setMix(settings.mix);
   if (k === 'quality') applyQuality();
   if (k === 'camMode' && app !== 'game') rig.setMode(settings.camMode);
   if (k === 'mouseLook' && !settings.mouseLook) rig.resetLook();
@@ -679,33 +753,94 @@ function refreshWait() {
   const goBtn = $('btn-go');
   if (!waiting) { setWait(''); if (goBtn) goBtn.classList.add('hidden'); return; }
   const n = readyCount();
+  // Speedway: dedicated match server — auto-queue, no host GO
+  if (selMode === 'speed') {
+    if (goBtn) goBtn.classList.add('hidden');
+    const q = room?.queue?.length || n;
+    setWait(q < 2
+      ? `IN QUEUE — ${q} racer · match opens with a friend or bots in a few seconds`
+      : `IN QUEUE — ${q} racers · starting…`);
+    return;
+  }
   if (isOwner()) { setWait(`${n} player${n === 1 ? '' : 's'} ready — press GO (G) to launch`); if (goBtn) goBtn.classList.remove('hidden'); }
   else { setWait(`${n} player${n === 1 ? '' : 's'} ready — waiting for the host to launch`); if (goBtn) goBtn.classList.add('hidden'); }
 }
 async function netConnect() {
   try { await net.connect(); net.send({ t: 'hello', name: mpName }); } catch (e) { /* offline: single player still works, START falls back to a local game */ }
 }
-function sendReady() { commitName(); sentReady = true; net.send({ t: 'ready', name: mpName, mode: selMode, role: roleFor(selMode), car: selCar, map: world.mapId }); }
-function leaveRoom() { waiting = false; sentReady = false; net.inSession = false; net.send({ t: 'menu' }); refreshWait(); }
-function goNow() { if (waiting && isOwner()) net.send({ t: 'go' }); }
+function sendReady() { commitName(); sentReady = true; net.wantSeat = true; net.send({ t: 'ready', name: mpName, mode: selMode, role: roleFor(selMode), car: selCar, map: world.mapId }); }
+function leaveRoom() { waiting = false; sentReady = false; net.inSession = false; net.wantSeat = false; net.send({ t: 'menu' }); refreshWait(); }
+function goNow() {
+  if (!waiting || !isOwner()) return;
+  if (selMode === 'speed') return; // dedicated auto-start — no GO
+  net.send({ t: 'go' });
+}
 net.on((m) => {
-  if (m.t === 'room') { room = m; if (app === 'garage' || waiting) refreshWait(); }
-  else if (m.t === 'reopened') { net.send({ t: 'hello', name: mpName }); if (waiting) sendReady(); }
-  else if (m.t === 'netstatus') {
-    if (!game || !game.multi) return;
-    if (m.state === 'reconnecting') game.notify('CONNECTION', 'Reconnecting…', '#ffb400', true);
-    else if (m.state === 'resumed') {
-      // back in the same slot. If the session we were in has ended / been replaced meanwhile, don't keep driving a ghost world.
-      if (!m.running || (m.sid != null && game.sid != null && m.sid !== game.sid)) { game.notify('SESSION ENDED', 'The session ended while you were offline', '#ff6040', true); game.multi.net = null; net.inSession = false; }
-      else game.notify('CONNECTION', 'Reconnected', '#3aff90');
-    } else if (m.state === 'expired') { game.notify('DISCONNECTED', 'Lost your slot — back to the menu to rejoin', '#ff4040', true); game.multi.net = null; net.inSession = false; }
+  if (m.t === 'room') {
+    room = m;
+    if (app === 'garage' || waiting) refreshWait();
+    if (game && game.multi && m.session && m.session.running && m.session.host) game.adoptHost(m.session.host);
   }
-  else if (m.t === 'closed') { room = null; if (game && game.multi) { game.notify('DISCONNECTED', 'Multiplayer server unreachable', '#ff4040', true); game.multi.net = null; net.inSession = false; } if (waiting) { setWait('Connection lost — reconnecting…'); } }
+  else if (m.t === 'reopened') {
+    net.send({ t: 'hello', name: mpName });
+    if (waiting || sentReady) sendReady();
+  }
+  else if (m.t === 'netstatus') {
+    if (m.state === 'reconnecting') {
+      if (game && game.multi) game.notify('CONNECTION', 'Reconnecting…', '#ffb400', true);
+      else if (waiting) setWait('Connection lost — reconnecting…');
+    } else if (m.state === 'resumed') {
+      // Same seat again.
+      if (game && game.multi && m.running && m.sid != null && game.sid === m.sid) {
+        // Soft reconnect mid-race — keep the world, just resume streaming
+        game.multi.net = net;
+        net.inSession = true; net.wantSeat = true;
+        game.notify('CONNECTION', 'Reconnected', '#3aff90');
+        return;
+      }
+      if (m.rejoin && m.playerState === 'playing' && !(game && game.multi)) {
+        // Hard rejoin (refresh / full reload) — rebuild the session
+        beginSession(m.rejoin, true);
+        if (game) game.notify('CONNECTION', 'Rejoined the session', '#3aff90', true);
+        return;
+      }
+      if (!game || !game.multi) return;
+      if (!m.running || (m.sid != null && game.sid != null && m.sid !== game.sid)) {
+        game.notify('SESSION ENDED', 'The session ended while you were offline', '#ff6040', true);
+        endMultiClean();
+      } else {
+        game.multi.net = net;
+        game.notify('CONNECTION', 'Reconnected', '#3aff90');
+      }
+    } else if (m.state === 'expired') {
+      if (game && game.multi) game.notify('DISCONNECTED', 'Lost your seat — rejoin from the menu', '#ff4040', true);
+      endMultiClean();
+      if (waiting) { setWait('Seat expired — press START again'); waiting = false; sentReady = false; refreshWait(); }
+    }
+  }
+  else if (m.t === 'closed') {
+    // Only tear down the race if we are NOT still inside the resume window
+    if (!net._resuming) {
+      room = null;
+      if (game && game.multi) {
+        game.notify('DISCONNECTED', 'Multiplayer server unreachable', '#ff4040', true);
+        endMultiClean();
+      }
+    }
+    if (waiting) setWait('Connection lost — reconnecting…');
+  }
   else if (m.t === 'claim') { if (m.ok) { game && game.notify('HOST', 'You are now the room host', '#3aff90', true); refreshWait(); } else alert(m.msg || 'Wrong password'); }
+  else if (m.t === 'match') beginSession(m, !!m.late);
   else if (m.t === 'start') beginSession(m);
   else if (m.t === 'assign') beginSession(m, true);
   else if (game && game.multi) game.onNet(m);
 });
+function endMultiClean() {
+  net.inSession = false;
+  net.wantSeat = false;
+  if (game) game.multi = null;
+}
+
 async function beginSession(m, late = false) {
   if (!['garage', 'game', 'paused', 'result', 'menu'].includes(app)) return;
   waiting = false; refreshWait();
@@ -713,14 +848,23 @@ async function beginSession(m, late = false) {
   audio.init(); audio.settings = settings; audio.applyVolumes();
   if (audio.music && !audio.music.started) { try { audio.music.start(); } catch (e) { /* */ } }
   show(null); hud.show(true); app = 'game';
-  const me = m.players.find((p) => p.id === net.id);
-  const mode = m.event === 'free' ? 'free' : (me && me.role === 'cop' ? 'cop' : 'race');
+  const roster = m.roster || m.players || [];
+  const me = roster.find((p) => p.id === net.id) || (m.players || []).find((p) => p.id === net.id);
+  const mode = m.mode === 'speed' || m.event === 'speed' ? 'speed'
+    : m.event === 'free' ? 'free'
+    : (me && me.role === 'cop' ? 'cop' : 'race');
   selMode = mode; selCar = me ? me.car : selCar;
-  game.start(mode, selCar, { myId: net.id, host: m.host, players: m.players, event: m.event, sid: m.sid, net, late: late ? m : null });
-  net.inSession = true;
+  const authority = m.authority === 'server' || m.t === 'match' ? 'server' : null;
+  if (authority) net.authority = 'server';
+  game.start(mode, selCar, {
+    myId: net.id, host: m.host ?? null, players: m.players || roster.filter((p) => p.human !== false),
+    roster, event: m.event || mode, sid: m.sid, net, authority, finishDist: m.finishDist,
+    late: late ? m : null,
+  });
+  net.inSession = true; net.wantSeat = true;
   rig.setMode(settings.camMode || 0); hud.camLabel(CAM_MODES[rig.modeIndex].label);
-  const n = m.players.length;
-  game.notify('ONLINE', `${n} player${n > 1 ? 's' : ''} in the session`, '#ff3aa0', true);
+  const n = (m.players || roster.filter((p) => p.human)).length;
+  game.notify(authority ? 'SPEEDWAY' : 'ONLINE', `${n} player${n > 1 ? 's' : ''} · ${authority ? 'server authority' : 'session'}`, '#ff3aa0', true);
 }
 
 boot().catch((e) => { console.error(e); $('load-text').textContent = 'Error: ' + e.message; });
