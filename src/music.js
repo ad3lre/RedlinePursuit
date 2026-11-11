@@ -98,6 +98,8 @@ const SUNO = [
   ['president-a', 'President', 0.6, 83],
   ['president-b', 'President (B)', 0.6, 87],
   ['rj', 'RJ', 0.5, 63],
+  ['deep-cut', 'Deep Cut', 0.6, 240],
+  ['prison-of-shadows', 'Prison of Shadows', 0.55, 135],
 ].map(([id, title, e, d]) => ({
   id: 'suno-' + id, kind: 'suno', title, group: 'Playlist', e, d,
   url: 'audio/playlist/' + id + '.mp3',
