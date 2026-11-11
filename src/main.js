@@ -305,8 +305,8 @@ function loop(now) {
 }
 
 function handleGlobalKeys() {
-  // Shift+A: take over as room host (password is checked by the relay, never stored in the client). Not while actively driving: Shift = nitro, A = steer.
-  if (input.hit('KeyA') && input.k('ShiftLeft', 'ShiftRight') && net.connected && !(app === 'game' && game.state === 'playing')) {
+  // Shift+L: take over as room host (password is checked by the relay, never stored in the client). Not while actively driving: Shift = nitro, A = steer.
+  if (input.hit('KeyL') && input.k('ShiftLeft', 'ShiftRight') && net.connected && !(app === 'game' && game.state === 'playing')) {
     const pw = window.prompt('Host password:'); input.keys.clear();
     if (pw) net.send({ t: 'claim', pw });
   }
