@@ -6,6 +6,12 @@ export const LOOP_HALF_W = 13;
 export const CONN_HALF_W = 10;
 
 export function loopRadius(t, mapId = currentMap) {
+  if (mapId === 'speedway') {
+    // Elongated high-speed oval: long N–S straights, tight banked ends — ~10 km lap
+    const a = 1780, b = 980;
+    const c = Math.cos(t), s = Math.sin(t);
+    return 1 / Math.sqrt((c * c) / (a * a) + (s * s) / (b * b));
+  }
   if (mapId === 'tokyo') {
     // Distinct Tokyo Wangan + Touge silhouette: flatter high-speed Wangan straight over Tokyo Bay on the east (cos(t)>0),
     // sweeping deep into the Hakone/Haruna mountain S-curves on the west (cos(t)<0).
@@ -138,6 +144,7 @@ function driveableProfile(pts, maxGrade, pin = 1, closed = false) {
 export function buildRoads(mapId = currentMap) {
   const isTokyo = mapId === 'tokyo';
   const isStuttgart = mapId === 'stuttgart';
+  const isSpeedway = mapId === 'speedway';
   const roads = [];
   // ---- Highway loop ----
   const dense = [];
@@ -146,16 +153,17 @@ export function buildRoads(mapId = currentMap) {
   let loopPts = resample(dense, 10);
   loopPts.pop(); // closed
   for (const p of loopPts) {
-    const minH = isTokyo && p.x > 480 ? lerp(5, 16, sstep(480, 780, p.x)) : 3;
+    const minH = isTokyo && p.x > 480 ? lerp(5, 16, sstep(480, 780, p.x)) : isSpeedway ? 2 : 3;
     p.h = Math.max(rawHeight(p.x, p.z, mapId), minH);
   }
   smoothHeights(loopPts, true, 10, 4);
   for (const p of loopPts) {
-    const minH = isTokyo && p.x > 480 ? lerp(5, 15, sstep(480, 780, p.x)) : 3.5;
+    const minH = isTokyo && p.x > 480 ? lerp(5, 15, sstep(480, 780, p.x)) : isSpeedway ? 2 : 3.5;
     p.h = Math.max(p.h, minH);
   }
-  const loopName = isTokyo ? 'WANGAN EXPRESSWAY' : isStuttgart ? 'STUTTGARTER RING' : 'COAST HIGHWAY';
-  const loop = { name: loopName, pts: loopPts, halfW: LOOP_HALF_W, closed: true, kind: 'highway' };
+  const loopName = isTokyo ? 'WANGAN EXPRESSWAY' : isStuttgart ? 'STUTTGARTER RING' : isSpeedway ? 'REDLINE SPEEDWAY' : 'COAST HIGHWAY';
+  // Wider deck on the speed oval so packs can draft three-wide
+  const loop = { name: loopName, pts: loopPts, halfW: isSpeedway ? 18 : LOOP_HALF_W, closed: true, kind: 'highway' };
   roads.push(loop);
 
   const loopIndexAtAngle = (ang) => {
@@ -165,7 +173,21 @@ export function buildRoads(mapId = currentMap) {
     return best;
   };
 
-  // ---- Connectors ----
+  const nL = loopPts.length;
+  // ---- Connectors (speedway is a pure closed oval — no city ramps) ----
+  if (isSpeedway) {
+    const MAXB = 0.085; // stronger banking into the tight ends
+    let bank = loopPts.map((b, i) => {
+      const a = loopPts[(i - 1 + nL) % nL], c = loopPts[(i + 1) % nL];
+      const l1 = Math.hypot(b.x - a.x, b.z - a.z) || 1, l2 = Math.hypot(c.x - b.x, c.z - b.z) || 1;
+      const cross = ((b.x - a.x) / l1) * ((c.z - b.z) / l2) - ((b.z - a.z) / l1) * ((c.x - b.x) / l2);
+      const kappa = cross / ((l1 + l2) / 2);
+      return -Math.sign(kappa) * clamp(Math.abs(kappa) * 80, 0, MAXB);
+    });
+    for (let pass = 0; pass < 8; pass++) bank = bank.map((_, i) => { let sum = 0; for (let k = -10; k <= 10; k++) sum += bank[(i + k + nL) % nL]; return sum / 21; });
+    loopPts.forEach((pt, i) => { pt.bank = bank[i]; });
+    return { roads, loop, connectors: [], ramps: [], loopIndexAtAngle };
+  }
   const connDefs = isTokyo ? [
     { tag: 'north', name: 'SHINJUKU DORI', jp: '新宿通り', s: { x: 0, z: -CITY_HALF }, dir: { x: 0, z: -1 }, ang: -Math.PI / 2, wig: 75, freq: 1 },
     { tag: 'south', name: 'SHIBUYA DORI', jp: '渋谷通り', s: { x: 0, z: CITY_HALF }, dir: { x: 0, z: 1 }, ang: Math.PI / 2, wig: -80, freq: 1 },
@@ -190,7 +212,6 @@ export function buildRoads(mapId = currentMap) {
   ];
   const connectors = [];
   const ramps = [];
-  const nL = loopPts.length;
   const loopTan = (i) => { const a = loopPts[(i - 1 + nL) % nL], b = loopPts[(i + 1) % nL]; const dx = b.x - a.x, dz = b.z - a.z, l = Math.hypot(dx, dz); return { x: dx / l, z: dz / l }; };
   for (const c of connDefs) {
     const li = loopIndexAtAngle(c.ang);

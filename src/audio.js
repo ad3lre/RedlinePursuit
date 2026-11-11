@@ -13,7 +13,7 @@ function makeCurve(fn, n = 1024) {
 }
 
 export class AudioSys {
-  constructor() { this.ready = false; this.settings = { master: 0.8, music: 0.6, sfx: 0.9 }; }
+  constructor() { this.ready = false; this.settings = { master: 0.8, music: 0.6, sfx: 0.9, mix: 'synth' }; }
 
   init() {
     if (this.ready) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
@@ -70,6 +70,7 @@ export class AudioSys {
     this.applyVolumes();
     this.buildLoops();
     this.music = new Music(this);
+    if (this.settings.mix) this.music.setMix(this.settings.mix);
   }
 
   applyVolumes() {
@@ -79,9 +80,10 @@ export class AudioSys {
     const duck = this._dramaDuck ?? 1;
     this.musicBus.gain.value = s.music * 0.55 * duck;
     this.sfxBus.gain.value = s.sfx;
+    if (this.music && s.mix) this.music.setMix(s.mix);
   }
 
-  /** Pursuit drama: duck music slightly under chaos, push BPM when heat is high. */
+  /** Pursuit drama: duck music under chaos; drive DJ mood / heat-matched track energy. */
   setDrama(level = 0, heat = 0) {
     if (!this.ready) return;
     // level 0..3, heat 0..5 — leave room for engine/sirens at peak chase
@@ -90,8 +92,8 @@ export class AudioSys {
     const s = this.settings;
     this.musicBus.gain.value = s.music * 0.55 * duck;
     if (this.music) {
-      const bpm = level >= 3 ? 138 : level >= 2 ? 132 : 128;
-      this.music.bpm = bpm;
+      this.music.setLevel(level);
+      this.music.setHeat(heat);
     }
   }
 

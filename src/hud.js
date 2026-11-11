@@ -20,13 +20,14 @@ export class HUD {
     this.markerPool = [];
     this.dmgFlash = 0;
     this.radioBox = $('radio');
+    this.nowPlayingBox = $('now-playing');
   }
   show(b) { this.root.classList.toggle('hidden', !b); }
   setMode(mode, game) {
     this.mode = mode;
-    $('hud-mode').textContent = { race: 'HOT PURSUIT RACE', cop: 'INTERCEPTOR', free: 'FREE RUN' }[mode];
+    $('hud-mode').textContent = { race: 'HOT PURSUIT RACE', cop: 'INTERCEPTOR', free: 'FREE RUN', speed: 'REDLINE SPEEDWAY' }[mode];
     $('abilities').classList.toggle('hidden', mode !== 'cop');
-    $('pos-box').classList.toggle('hidden', mode !== 'race');
+    $('pos-box').classList.toggle('hidden', mode !== 'race' && mode !== 'speed');
     $('bounty-box').classList.toggle('hidden', mode !== 'free');
     $('busted-box').classList.toggle('hidden', mode !== 'cop');
     $('heat').classList.toggle('hidden', mode === 'cop');
@@ -47,6 +48,12 @@ export class HUD {
     r.innerHTML = `<span class="rtag">POLICE RADIO</span> ${text}`;
     r.classList.remove('hidden'); r.classList.remove('rfade'); void r.offsetWidth; r.classList.add('rfade');
   }
+  nowPlaying(track) {
+    const el = this.nowPlayingBox; if (!el || !track) return;
+    const group = track.group || (track.kind === 'radio' ? 'Radio' : 'Synth');
+    el.innerHTML = `<span class="ntag">NOW PLAYING · ${group.toUpperCase()}</span>${track.title || ''}`;
+    el.classList.remove('hidden'); el.classList.remove('rfade'); void el.offsetWidth; el.classList.add('rfade');
+  }
   countdown(n) {
     const c = $('countdown');
     c.textContent = n; c.classList.remove('pop'); void c.offsetWidth; c.classList.add('pop');
@@ -59,16 +66,20 @@ export class HUD {
 
   update(dt, g, camera, world, settings) {
     const pl = g.player; if (!pl) return;
+    // While spectating, the instruments follow the watched car so the stream feels live
+    const view = (g.spectating && g.specTarget && g.specTarget()) || pl;
     this.dmgFlash = Math.max(0, this.dmgFlash - dt * 1.5);
-    const kmh = Math.round(pl.speed * MS_TO_KMH);
-    this._manual = !!pl.manual;
-    this.drawSpeedo(kmh, pl.rpm, pl.gear, pl.nitro, pl.health, pl.nitroActive, pl.vF < -0.5);
-    this.drawGMeter(pl.accelLong, pl.accelLat);
+    const kmh = Math.round(view.speed * MS_TO_KMH);
+    this._manual = !!view.manual;
+    this.drawSpeedo(kmh, view.rpm, view.gear, view.nitro, view.health, view.nitroActive, view.vF < -0.5);
+    this.drawGMeter(view.accelLong || 0, view.accelLat || 0);
     const trip = $('trip');
-    if (trip) trip.innerHTML = `TRIP <b>${fmtDistance(pl.odometer)}</b>`;
+    if (trip) trip.innerHTML = g.spectating
+      ? `WATCHING <b>${view.name || 'RACER'}</b>`
+      : `TRIP <b>${fmtDistance(pl.odometer)}</b>`;
     // top-left info
     $('hud-time').textContent = fmtTime(g.raceTime || 0);
-    if (g.mode === 'race') {
+    if (g.mode === 'race' || g.mode === 'speed') {
       $('pos-num').textContent = g.position || '-';
       $('cp').textContent = `CP ${Math.min(g.checkIdx, g.checkpoints.length - 1)}/${g.checkpoints.length - 1}`;
       $('dist').textContent = `${Math.max(0, (g.finishDist - g.playerProgress) / 1000).toFixed(1)} km left`;
@@ -86,9 +97,14 @@ export class HUD {
     if (g.mode !== 'cop') {
       const bars = heatEl.querySelectorAll('.hb');
       bars.forEach((b, i) => b.classList.toggle('on', i < g.heat && g.pursuit));
-      $('heat-label').textContent = g.pursuit ? (g.mode === 'free' && g.lastSeen > 2 ? `Losing them… ${Math.max(0, 14 - g.lastSeen).toFixed(0)}` : 'PURSUIT') : g.mode === 'free' ? 'UNDETECTED' : 'STANDBY';
+      const evadeMode = g.mode === 'free';
+      const mil = g.heat >= 4;
+      const loseT = mil ? 18 : 14;
+      $('heat-label').textContent = g.pursuit
+        ? (evadeMode && g.lastSeen > 2 ? `Losing them… ${Math.max(0, loseT - g.lastSeen).toFixed(0)}` : (mil ? 'BLACKOUT' : 'PURSUIT'))
+        : evadeMode ? 'UNDETECTED' : 'STANDBY';
       heatEl.classList.toggle('active', g.pursuit);
-      heatEl.classList.toggle('evade', g.mode === 'free' && g.pursuit && g.lastSeen > 2);
+      heatEl.classList.toggle('evade', evadeMode && g.pursuit && g.lastSeen > 2);
     }
     const bb = $('bustbar');
     bb.classList.toggle('hidden', g.bust <= 0.01);
@@ -97,9 +113,9 @@ export class HUD {
     $('draft').classList.toggle('hidden', !g.drafting);
     const driftEl = $('drift-tag');
     if (driftEl) {
-      const drifting = !!(pl.drifting && pl.speed > 15);
-      driftEl.classList.toggle('hidden', !drifting);
-      if (drifting) driftEl.textContent = (g.driftT || 0) > 2.2 ? 'PERFECT DRIFT' : (g.driftT || 0) > 1.0 ? `DRIFT  ${(g.driftT || 0).toFixed(1)}s` : 'DRIFTING';
+      const drifting = !!(view.drifting && view.speed > 15);
+      driftEl.classList.toggle('hidden', !drifting || !!g.spectating);
+      if (drifting && !g.spectating) driftEl.textContent = (g.driftT || 0) > 2.2 ? 'PERFECT DRIFT' : (g.driftT || 0) > 1.0 ? `DRIFT  ${(g.driftT || 0).toFixed(1)}s` : 'DRIFTING';
     }
     $('centerdot').classList.toggle('hidden', !settings.centerDot);
     // abilities (cop)
@@ -336,16 +352,22 @@ export class HUD {
       const dist = Math.hypot(o.pos.x - pl.pos.x, o.pos.z - pl.pos.z);
       if (o.role === 'cop') {
         const chasing = !o.wrecked && !o.ai?.patrol && hunted;
-        const col = o.wrecked ? '#4a4a4a' : o.ai?.patrol ? '#9aa6ff' : blink ? '#ff2a3a' : '#2a62ff';
-        if (!inside(x, y, 6)) { if (chasing && dist < 900) offMap.push([x, y, col, distTag(dist), 'cop']); continue; }
+        const tank = o.military || o.spec?.kind === 'tank';
+        const col = o.wrecked ? '#4a4a4a' : o.ai?.patrol ? '#9aa6ff' : tank ? (blink ? '#c8ff40' : '#6a8a20') : blink ? '#ff2a3a' : '#2a62ff';
+        if (!inside(x, y, 6)) { if (chasing && dist < 900) offMap.push([x, y, col, distTag(dist), tank ? 'tank' : 'cop']); continue; }
         // vision cone for cops that are hunting / patrolling — shows where not to drive
         if (!o.wrecked && hunted) {
           const vr = (o.ai?.patrol ? 120 : 90) * scale, a0 = rot - o.yaw - Math.PI / 2;
           const cg = c.createRadialGradient(x, y, 0, x, y, vr);
-          cg.addColorStop(0, o.ai?.patrol ? 'rgba(150,160,255,0.28)' : 'rgba(255,60,80,0.3)'); cg.addColorStop(1, 'rgba(0,0,0,0)');
+          cg.addColorStop(0, o.ai?.patrol ? 'rgba(150,160,255,0.28)' : tank ? 'rgba(180,220,40,0.28)' : 'rgba(255,60,80,0.3)'); cg.addColorStop(1, 'rgba(0,0,0,0)');
           c.fillStyle = cg; c.beginPath(); c.moveTo(x, y); c.arc(x, y, vr, a0 - 0.55, a0 + 0.55); c.closePath(); c.fill();
         }
-        arrow(x, y, o.yaw, 5, col, o.wrecked ? '#000' : '#fff');
+        if (tank) {
+          c.save(); c.translate(x, y); c.rotate(rot - o.yaw);
+          c.fillStyle = col; c.strokeStyle = '#000'; c.lineWidth = 1.4;
+          c.fillRect(-4, -6, 8, 12); c.strokeRect(-4, -6, 8, 12);
+          c.fillRect(-1.2, -10, 2.4, 5); c.restore();
+        } else arrow(x, y, o.yaw, 5, col, o.wrecked ? '#000' : '#fff');
       } else if (o.role === 'racer') {
         const col = o.wrecked ? '#4a4a4a' : '#' + o.model.paint.color.getHexString();
         if (!inside(x, y, 6)) { if (!o.wrecked && !o.out) offMap.push([x, y, col, distTag(dist), o.net?.human ? 'human' : 'racer']); continue; }
@@ -355,6 +377,15 @@ export class HUD {
           c.lineWidth = 3; c.strokeStyle = 'rgba(0,0,0,0.8)'; c.strokeText(o.name, x, y - 10); c.fillStyle = '#fff'; c.fillText(o.name, x, y - 10);
         }
       }
+    }
+    for (const h of g.helis || []) {
+      if (!h.active) continue;
+      const [x, y] = toS(h.pos.x, h.pos.z);
+      const dist = Math.hypot(h.pos.x - pl.pos.x, h.pos.z - pl.pos.z);
+      if (!inside(x, y, 8)) { if (dist < 900) offMap.push([x, y, '#ffe060', distTag(dist), 'heli']); continue; }
+      c.fillStyle = blink ? '#ffe060' : '#c8a020'; c.strokeStyle = '#000'; c.lineWidth = 1.3;
+      c.beginPath(); c.moveTo(x, y - 5); c.lineTo(x + 6, y + 4); c.lineTo(x - 6, y + 4); c.closePath(); c.fill(); c.stroke();
+      c.beginPath(); c.moveTo(x - 7, y); c.lineTo(x + 7, y); c.strokeStyle = '#ffe060'; c.lineWidth = 2; c.stroke();
     }
     c.restore(); // end clip
 

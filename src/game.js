@@ -9,23 +9,71 @@ import { glowTexture, softGlowTexture, beamTexture, headlampPattern } from './te
 import { MAPS } from './world.js';
 import { MS_TO_KMH } from './units.js';
 import { Feel } from './feel.js';
+import { Helicopter } from './military.js';
+import { encodeInput, keysFromDrive, F_WRECKED, F_NITRO_ON, F_FINISHED, F_OUT } from '../shared/protocol.js';
 
 const COP_SPEC = { name: 'INTERCEPTOR', kind: 'gt', top: 91, accel: 17, grip: 9.6, steer: 1.0, mass: 1.25, armor: 1.0 };
 const COP_SPEC2 = { name: 'PURSUIT SPEC', kind: 'super', top: 94, accel: 18, grip: 10, steer: 1.05, mass: 1.15, armor: 0.9 };
 const COP_HEAVY = { name: 'HEAVY SUV', kind: 'suv', top: 84, accel: 15, grip: 9, steer: 0.9, mass: 2.0, armor: 1.8 };
+const COP_TANK = { name: 'M1 BLOCKADE', kind: 'tank', top: 42, accel: 9, grip: 7.2, steer: 0.55, mass: 6.5, armor: 4.5, color: 0x6a7e42, color2: 0x3f4c28, cg: 0.85 };
 const RACER_NAMES = ['KAZE', 'NOVA', 'VIPERA', 'GHOST', 'RAVEN', 'ZERO'];
 const DIRS = ['north', 'north east', 'east', 'south east', 'south', 'south west', 'west', 'north west'];
 
 const tmp = new THREE.Vector3();
 
-// Remote-controlled car (another player, or a bot simulated by the room host). Inputs come from snapshots;
-// local physics dead-reckons between snapshots and netSmooth() pulls the car toward the authoritative pose.
+// Remote-controlled car (another player, or a bot simulated by the room host).
+// Snapshots land in a short receive-time buffer; netSmooth() renders ~1 tick behind and interpolates
+// between known poses so the stream reads continuous instead of predict→correct→rubberband.
 class RemoteAI {
-  constructor(car) { this.car = car; this.progress = 0; this.finished = false; this.snap = null; this.age = 0; this.remote = true; }
+  constructor(car) {
+    this.car = car; this.progress = 0; this.finished = false; this.remote = true;
+    this.buf = []; this.snap = null; this.age = 0; this.lagging = false; this.seq = -1;
+  }
+  pushSnap(s, now) {
+    // drop out-of-order / duplicate seqs (seq is optional — older clients omit it)
+    if (s.seq != null && this.seq >= 0 && s.seq <= this.seq) return;
+    if (s.seq != null) this.seq = s.seq;
+    s.t = now;
+    this.buf.push(s);
+    while (this.buf.length > 32) this.buf.shift();
+    const cut = now - 1.2;
+    while (this.buf.length > 2 && this.buf[0].t < cut) this.buf.shift();
+    this.snap = s; this.age = 0; this.lagging = false;
+  }
+  /** Pose at render time (seconds, performance.now scale). Extrapolates briefly past the newest snap. */
+  sample(renderT) {
+    const b = this.buf; if (!b.length) return null;
+    const last = b[b.length - 1];
+    if (b.length === 1 || renderT >= last.t) {
+      const dt = Math.min(0.18, Math.max(0, renderT - last.t));
+      return {
+        x: last.x + last.vx * dt, y: last.y, z: last.z + last.vz * dt,
+        yaw: last.yaw + last.av * dt, vx: last.vx, vz: last.vz, av: last.av,
+        h: last.h, f: last.f, st: last.st, th: last.th, br: last.br, nitro: last.nitro,
+        extrap: dt > 0.001,
+      };
+    }
+    if (renderT <= b[0].t) return b[0];
+    let i = 1;
+    while (i < b.length - 1 && b[i].t < renderT) i++;
+    const a = b[i - 1], c = b[i];
+    const u = clamp((renderT - a.t) / Math.max(1e-4, c.t - a.t), 0, 1);
+    // smoothstep — softens snap edges without lagging the mid-pose
+    const uu = u * u * (3 - 2 * u);
+    return {
+      x: a.x + (c.x - a.x) * uu, y: a.y + (c.y - a.y) * uu, z: a.z + (c.z - a.z) * uu,
+      yaw: a.yaw + wrapAngle(c.yaw - a.yaw) * uu,
+      vx: a.vx + (c.vx - a.vx) * uu, vz: a.vz + (c.vz - a.vz) * uu, av: a.av + (c.av - a.av) * uu,
+      h: c.h, f: c.f, st: c.st, th: c.th, br: c.br, nitro: c.nitro, extrap: false,
+    };
+  }
   update(dt) {
     this.age += dt;
+    this.lagging = this.age > 0.4;
     const s = this.snap; if (!s) return;
     const i = this.car.input;
+    // Hold last inputs while lagging so remotes don't slam the brakes every packet gap
+    if (this.lagging) { i.throttle *= 0.96; i.nitro = 0; return; }
     i.steer = s.st; i.throttle = s.th; i.brake = s.br; i.handbrake = s.f & 8 ? 1 : 0; i.nitro = s.f & 16 ? 1 : 0;
   }
 }
@@ -35,6 +83,7 @@ export class Game {
   constructor(ctx) {
     Object.assign(this, ctx); // renderer, scene, camera, world, audio, input, settings, rig, vfx, hud
     this.cars = []; this.traffic = []; this.cops = []; this.racers = []; this.spikes = []; this.roadblocks = [];
+    this.helis = [];
     this.player = null; this.state = 'idle'; this.time = 0; this.timeScale = 1; this.slowmo = 0;
     this.idc = 1; this.acc = 0; this.heat = 0;
     this.gates = this.makeGate();
@@ -126,9 +175,16 @@ export class Game {
   // car-space headlamp mounts (from the model's lamp flares, else from body dims)
   lampMounts(car) {
     if (car._lampMounts) return car._lampMounts;
+    const d = car.dims;
     const heads = (car.model.heads || []).filter((h) => h.userData.lamp === 'head' && h.userData.layer === 'core');
     let pts = heads.map((h) => h.position.clone());
-    if (pts.length < 2) { const d = car.dims; pts = [new THREE.Vector3(-d.W * 0.32, 0.68, d.L / 2 - 0.15), new THREE.Vector3(d.W * 0.32, 0.68, d.L / 2 - 0.15)]; }
+    if (pts.length === 1) {
+      // one real lamp detected → mirror across X instead of dropping both to the dim heuristic
+      const a = pts[0], b = a.clone(); b.x *= -1; pts = [a, b];
+    } else if (pts.length < 2) {
+      const y = Math.max(0.55, (d.wheelR || 0.35) + 0.28);
+      pts = [new THREE.Vector3(-d.W * 0.32, y, d.L / 2 - 0.15), new THREE.Vector3(d.W * 0.32, y, d.L / 2 - 0.15)];
+    }
     pts.sort((a, b) => a.x - b.x);
     car._lampMounts = [pts[0], pts[pts.length - 1]];
     return car._lampMounts;
@@ -215,6 +271,8 @@ export class Game {
   clear() {
     for (const c of [...this.cars]) c.dispose();
     this.cars = []; this.traffic = []; this.cops = []; this.racers = []; this.netCars = new Map(); this.respawnT = 0; this.spectating = null;
+    for (const h of this.helis || []) h.dispose(this.scene);
+    this.helis = [];
     for (const s of this.spikes) this.scene.remove(s.mesh);
     this.spikes = []; this.roadblocks = [];
     this.player = null; this.gates.visible = false;
@@ -266,6 +324,12 @@ export class Game {
       this._route = buildRoute(nav, wps);
       return this._route;
     }
+    if (this.world.mapId === 'speedway') {
+      // One full lap of the high-speed oval (decreasing angle = race direction)
+      const wps = [L(90), L(60), L(30), L(0), L(-30), L(-60), L(-90), L(-120), L(-150), L(180), L(150), L(120), L(90)];
+      this._route = buildRoute(nav, wps.filter((id) => id != null));
+      return this._route;
+    }
     const entry = pickLow('north'), exit = pick('south'); // entry merges heading with the race direction (lower index), exit leaves it (higher index)
     const wps = [C(0, 360), C(0, -600), entry.navIds[0], entry.navIds[entry.navIds.length - 1], L(-115), L(-135), L(-160), L(180), L(155), L(130), L(108), exit.navIds[exit.navIds.length - 1], exit.navIds[0], C(0, 600), C(0, 240), C(360, 240), C(360, -120), C(120, -120), C(-240, -120), C(-240, 120)];
     this._route = buildRoute(nav, wps);
@@ -293,36 +357,49 @@ export class Game {
     const pl = this.addCar(police ? { ...spec, armor: spec.armor * 1.3 } : spec, { role: 'player', police, name: 'YOU' });
     pl.addInterior();
     this.player = pl;
-    pl.nitro = police ? 1 : 0.6;
+    pl.nitro = police ? 1 : mode === 'speed' ? 1 : 0.6;
     const P = {};
     if (multi) this.setupMulti(pl, route);
     else if (route) {
       // checkpoints
       this.checkpoints = [];
-      const N = 9;
+      const N = mode === 'speed' ? 12 : 9;
       for (let i = 1; i <= N; i++) this.checkpoints.push((route.length - 60) * (i / N) + 30);
       this.finishDist = this.checkpoints[N - 1];
       const place = (car, dist, lat) => {
         const p = pointAtDist(route, dist, P);
         car.place(p.x + -p.dz * lat, p.z + p.dx * lat, Math.atan2(p.dx, p.dz), 0);
       };
-      if (mode === 'race') {
-        const grid = [[34, -3.5], [34, 3.5], [22, -3.5], [22, 3.5]];
-        const pIdx = 3;
+      if (mode === 'race' || mode === 'speed') {
+        // Speedway packs wider (3-wide capable deck)
+        const grid = mode === 'speed'
+          ? [[48, -6], [48, 0], [48, 6], [30, -6], [30, 0], [30, 6]]
+          : [[34, -3.5], [34, 3.5], [22, -3.5], [22, 3.5]];
+        const pIdx = mode === 'speed' ? 4 : 3;
         let ri = 0;
         grid.forEach((g, i) => {
           if (i === pIdx) { place(pl, g[0], g[1]); return; }
           const ms = PLAYER_CARS[(carIdx + 1 + ri) % PLAYER_CARS.length];
           const col = RACER_COLORS[ri % RACER_COLORS.length];
           const rm = this.rivalModel(carIdx, ri);
-          const r = this.addCar({ ...ms, kind: rm.kind || ms.kind, top: ms.top * (0.985 + ri * 0.012) }, { role: 'racer', model: rm.model, color: col[0], color2: col[1], livery: 'stripe', name: RACER_NAMES[ri] });
+          const pace = mode === 'speed' ? (1.02 + ri * 0.015) : (0.985 + ri * 0.012);
+          const r = this.addCar({ ...ms, kind: rm.kind || ms.kind, top: ms.top * pace }, { role: 'racer', model: rm.model, color: col[0], color2: col[1], livery: 'stripe', name: RACER_NAMES[ri % RACER_NAMES.length] });
           place(r, g[0], g[1]);
-          r.ai = new RacerAI(r, route, 0.97 + ri * 0.02);
+          r.ai = new RacerAI(r, route, mode === 'speed' ? (1.02 + ri * 0.02) : (0.97 + ri * 0.02));
           r.ai.lane = g[1];
-          r.nitro = 0.5;
+          r.nitro = mode === 'speed' ? 0.85 : 0.5;
           this.racers.push(r); ri++;
         });
         this.racers.push(pl);
+        if (mode === 'speed') {
+          // Cops already on station — chase the pack from the jump
+          this.pursuit = true; this.heat = 2; this.lastSeen = 0; this.pursuitTime = 0;
+          for (let i = 0; i < 3; i++) {
+            const c = this.spawnCop(null, i === 2 ? COP_HEAVY : COP_SPEC);
+            place(c, 12 - i * 10, i % 2 ? 8 : -8);
+            c.ai.target = this.racers[i % this.racers.length];
+          }
+        }
       } else {
         // cop mode: 4 racers ahead, player + 2 partners behind
         for (let i = 0; i < 4; i++) {
@@ -347,7 +424,8 @@ export class Game {
       pl.place(0, 0, Math.PI, 0);
       this.heat = 1;
     }
-    this.spawnInitialTraffic();
+    // Speedway / speed mode: no civilians — pure pack racing
+    if (mode !== 'speed' && this.world.mapId !== 'speedway') this.spawnInitialTraffic();
     this.rig.setMode(this.settings.camMode || 0);
     this.rig.snap = true;
     this.state = 'countdown';
@@ -359,9 +437,10 @@ export class Game {
   }
 
   // ---------------- multiplayer ----------------
-  // multi = { myId, host, players: [{ id, name, car, slot }], bots, net }
+  // multi = { myId, host, players, roster?, authority?, net, sid, late? }
   setupMulti(pl, route) {
     const M = this.multi;
+    if (M.authority === 'server') return this.setupMultiServer(pl, route);
     const me = M.players.find((p) => p.id === M.myId);
     pl.net = { id: M.myId, owner: M.myId, human: true };
     pl.name = me?.name || 'YOU';
@@ -375,7 +454,6 @@ export class Game {
       this.finishDist = this.checkpoints[N - 1];
     }
     const humans = M.players.filter((p) => p.role !== 'cop'), cops = M.players.filter((p) => p.role === 'cop');
-    // bot count is derived the same way on every client so everyone builds the same grid
     const BOT_FILL = 4;
     const nBots = Math.max(0, BOT_FILL - humans.length) + (cops.length ? 0 : 0);
     this.botCount = nBots;
@@ -389,12 +467,11 @@ export class Game {
       const lat = lane(k);
       car.place(p.x + -p.dz * lat, p.z + p.dx * lat, Math.atan2(p.dx, p.dz), 0);
     };
-    const copBehind = (car, k) => { // cops start behind the grid, side by side
+    const copBehind = (car, k) => {
       const p = pointAtDist(rr, Math.max(6, (route ? 34 : 220) - 26 - Math.floor(k / 2) * 12), P);
       const lat = lane(k);
       car.place(p.x + -p.dz * lat, p.z + p.dx * lat, Math.atan2(p.dx, p.dz), 0);
     };
-    // every player is drawn with the car + default colours THEY chose. No recolouring, ever: what you pick is what everyone sees.
     for (const p of M.players) {
       const isCop = p.role === 'cop';
       if (M.late && p.id === M.myId && M.late.spawn) { const sp = M.late.spawn; pl.place(sp.x, sp.z, sp.yaw, sp.speed || 0); continue; }
@@ -407,7 +484,6 @@ export class Game {
       if (isCop) { copBehind(c, p.slot); c.sirenOn = true; this.cops.push(c); } else { placeAt(c, p.slot); this.racers.push(c); }
       this.netCars.set(p.id, c);
     }
-    // bots: model + colours are a pure function of the slot index, so every client renders identical bots
     for (let i = 0; i < nBots; i++) {
       const k = humans.length + i;
       const ms = PLAYER_CARS[(i + 1) % PLAYER_CARS.length];
@@ -423,14 +499,75 @@ export class Game {
       this.netCars.set(id, c);
       this.racers.push(c);
     }
-    if (pl.role === 'cop' || pl.police) { /* the local cop is already in this.cops via spawn logic below */ }
+    if (pl.role === 'cop' || pl.police) { /* */ }
     else this.racers.push(pl);
     this.expectedRacers = this.racers.length;
     if (!route) this.heat = 1;
   }
+
+  /** Dedicated Speedway: server sims everyone; client predicts local + interpolates remotes/bots. */
+  setupMultiServer(pl, route) {
+    const M = this.multi;
+    const roster = M.roster || M.players || [];
+    const me = roster.find((p) => p.id === M.myId) || M.players?.find((p) => p.id === M.myId);
+    pl.net = { id: M.myId, owner: M.myId, human: true, slot: me?.slot ?? 0 };
+    pl.name = me?.name || 'YOU';
+    this.netSendT = 0; this.sid = M.sid;
+    this._slotToId = new Map();
+    this.botRoute = route || this.raceRoute();
+    this.pursuit = true; this.heat = 2;
+    if (route) {
+      this.checkpoints = [];
+      const N = 12;
+      for (let i = 1; i <= N; i++) this.checkpoints.push((route.length - 60) * (i / N) + 30);
+      this.finishDist = M.finishDist || this.checkpoints[N - 1];
+    }
+    const P = {};
+    const placeAt = (car, slot) => {
+      const grid = [[48, -6], [48, 0], [48, 6], [30, -6], [30, 0], [30, 6], [12, -6], [12, 0], [12, 6], [0, -6], [0, 0], [0, 6]];
+      const g = grid[(slot | 0) % grid.length];
+      const p = pointAtDist(this.botRoute, g[0], P);
+      car.place(p.x + -p.dz * g[1], p.z + p.dx * g[1], Math.atan2(p.dx, p.dz), 0);
+    };
+    for (const p of roster) {
+      this._slotToId.set(p.slot | 0, p.id);
+      if (p.id === M.myId) {
+        pl.net.slot = p.slot | 0;
+        if (M.late?.spawn) {
+          const sp = M.late.spawn;
+          pl.place(sp.x, sp.z, sp.yaw, sp.speed || 0);
+          this.playerProgress = sp.progress || 0;
+        } else placeAt(pl, p.slot);
+        continue;
+      }
+      const isCop = p.role === 'cop' || p.cop;
+      const spec = PLAYER_CARS[(p.car | 0) % PLAYER_CARS.length];
+      const col0 = p.color ?? (isCop ? 0x0b0b0d : spec.color);
+      const col1 = p.color2 ?? (isCop ? 0xf2f2f2 : spec.color2);
+      const c = this.addCar(isCop ? { ...spec, armor: spec.armor * 1.3 } : spec, {
+        role: isCop ? 'cop' : 'racer', police: isCop, name: p.name,
+        color: col0, color2: col1, livery: isCop ? 'police' : (p.bot ? 'stripe' : spec.livery),
+      });
+      c.net = { id: p.id, owner: 'server', human: !!p.human, bot: !!p.bot, slot: p.slot | 0 };
+      c.ai = new RemoteAI(c);
+      c.nitro = isCop ? 1 : 0.85;
+      placeAt(c, p.slot);
+      if (isCop) { c.sirenOn = true; this.cops.push(c); } else this.racers.push(c);
+      this.netCars.set(p.id, c);
+    }
+    this.racers.push(pl);
+    this.expectedRacers = this.racers.length;
+    pl.nitro = 1;
+  }
+
+  serverAuthority() { return !!(this.multi && this.multi.authority === 'server'); }
   racerTotal() { return this.multi ? Math.max(1, this.expectedRacers || this.racers.length) : 4; }
-  mine(car) { return !this.multi || !car.net || car.net.owner === this.multi.myId; }
+  mine(car) {
+    if (this.serverAuthority()) return car === this.player;
+    return !this.multi || !car.net || car.net.owner === this.multi.myId;
+  }
   ownedNetCars() {
+    if (this.serverAuthority()) return [this.player];
     const out = [this.player];
     if (this.multi && this.multi.host === this.multi.myId) for (const c of this.netCars.values()) if (c.net.bot) out.push(c);
     return out;
@@ -439,7 +576,20 @@ export class Game {
     const M = this.multi; if (!M || !M.net) return;
     this.netSendT -= dtReal;
     if (this.netSendT > 0) return;
-    this.netSendT = 1 / 15;
+    if (this.serverAuthority()) {
+      // Inputs only @ ~40 Hz
+      this.netSendT = 1 / 40;
+      this._netSeq = (this._netSeq || 0) + 1;
+      const pl = this.player;
+      if (!pl || this.spectating) return;
+      const keys = keysFromDrive(pl.input);
+      M.net.sendBin(encodeInput(this._netSeq, keys, pl.input.steer || 0));
+      return;
+    }
+    const pl0 = this.player;
+    const hot = pl0 && (pl0.nitroActive || pl0.speed > 45 || this.spectating);
+    this.netSendT = hot ? 1 / 25 : 1 / 20;
+    this._netSeq = (this._netSeq || 0) + 1;
     const r = (v, k = 100) => Math.round(v * k) / k;
     const cars = this.ownedNetCars().map((c) => {
       const pl = c === this.player;
@@ -447,10 +597,8 @@ export class Game {
       const f = (c.wrecked ? 1 : 0) | (c.nitroActive ? 2 : 0) | ((pl ? this.playerFinished : c.ai?.finished) ? 4 : 0) | (c.input.handbrake ? 8 : 0) | (c.input.nitro ? 16 : 0) | (pl && this.spectating ? 32 : 0);
       return [c.net.id, r(c.pos.x), r(c.pos.y), r(c.pos.z), r(c.yaw, 1000), r(c.vel.x), r(c.vel.y), r(c.angVel, 1000), r(c.health, 1000), f, Math.round(prog), r(c.input.steer), r(c.input.throttle), r(c.input.brake), r(c.nitro)];
     });
-    // sid: session the sender is in (receivers drop snapshots from another session);
-    // me: sender's identity so clients that never heard about this player (late join) can spawn its car
     const pl = this.player;
-    M.net.send({ t: 's', sid: this.sid, me: [M.myId, pl.name, this.carIdx, pl.police ? 'cop' : 'racer'], cars });
+    M.net.send({ t: 's', sid: this.sid, seq: this._netSeq, me: [M.myId, pl.name, this.carIdx, pl.police ? 'cop' : 'racer'], cars });
   }
   // a snapshot arrived from a player this client has no car for (joined late via a bot handover, or the 'assign'
   // never reached us): build their car on the spot instead of silently ignoring them forever
@@ -476,6 +624,35 @@ export class Game {
   }
   onNet(m) {
     if (!this.multi) return;
+    if (m.t === 'snap') return this.onServerSnap(m.snap);
+    if (m.t === 'joined' && this.serverAuthority()) {
+      // New human replaced a bot — drop bot, spawn remote
+      if (m.takeBot) this.dropNetCar(m.takeBot);
+      if (!this.netCars.has(m.id) && m.id !== this.multi.myId) {
+        const c = this.spawnRemote(m.id, m.name, m.car, 'racer');
+        if (c) { c.net.slot = m.slot | 0; this._slotToId?.set(m.slot | 0, m.id); }
+      }
+      return;
+    }
+    if (m.t === 'end' && this.serverAuthority()) {
+      if (this.state === 'playing' || this.state === 'countdown') {
+        const mine = (m.standings || []).find((s) => s.id === this.multi.myId);
+        const place = mine?.finished ? (m.standings.filter((s) => s.finished).findIndex((s) => s.id === this.multi.myId) + 1) : 0;
+        if (mine?.finished) { this.playerFinished = true; this.playerPlace = place; this.endGame('finish', true); }
+        else if (mine?.out) this.endGame('busted', true);
+        else this.endGame(m.reason === 'complete' ? 'finish' : 'wrecked', true);
+      }
+      return;
+    }
+    if (m.t === 'event' && m.kind === 'finish' && this.serverAuthority()) {
+      if (m.id === this.multi.myId) { this.playerFinished = true; this.finishRace(); }
+      else {
+        const c = this.netCars.get(m.id);
+        if (c && !c.ai?.finished) { c.ai.finished = true; this.finished.push(c); }
+      }
+      return;
+    }
+    if (this.serverAuthority() && (m.t === 'joinreq' || m.t === 'assign' || m.t === 's')) return;
     if (m.t === 'joinreq' && this.multi.host === this.multi.myId) return this.assignBot(m);
     if (m.t === 'taken') { this.dropNetCar(m.bot); return; }
     if (m.t === 's') {
@@ -484,13 +661,18 @@ export class Game {
         const own = (m.cars || []).some((a) => a[0] === m.from);
         if (own && !this.netCars.has(m.from)) this.spawnRemote(m.me[0], m.me[1], m.me[2], m.me[3]);
       }
+      const now = performance.now() * 0.001;
       for (const a of m.cars || []) {
         let c = this.netCars.get(a[0]);
         // bot ids are host-scoped: only accept bot snapshots from whoever actually simulates them
         if (c && c.net.bot && m.from && c.net.owner !== m.from) c.net.owner = m.from;
         if (!c || !(c.ai instanceof RemoteAI)) continue;
-        c.ai.snap = { x: a[1], y: a[2], z: a[3], yaw: a[4], vx: a[5], vz: a[6], av: a[7], h: a[8], f: a[9], st: a[11], th: a[12], br: a[13] };
-        c.ai.age = 0; c.ai.progress = a[10];
+        c.ai.pushSnap({
+          x: a[1], y: a[2], z: a[3], yaw: a[4], vx: a[5], vz: a[6], av: a[7],
+          h: a[8], f: a[9], st: a[11], th: a[12], br: a[13], nitro: a[14],
+          seq: m.seq,
+        }, now);
+        c.ai.progress = a[10];
         c.health = a[8]; c.nitro = a[14] ?? c.nitro; c.out = !!(a[9] & 32);
         if (a[9] & 4 && !c.ai.finished && this.route) { c.ai.finished = true; this.finished.push(c); }
         if (!(a[9] & 1) && c.wrecked) { c.wrecked = false; c.sirenOn = undefined; }
@@ -537,8 +719,64 @@ export class Game {
       }
     }
   }
+  /** Apply a dedicated-server binary snapshot (remotes interp + local reconcile). */
+  onServerSnap(snap) {
+    if (!snap || !this.multi) return;
+    const now = snap.recvAt || (performance.now() * 0.001);
+    const slotMap = this._slotToId;
+    for (const a of snap.cars) {
+      let cid = slotMap?.get(a.slot);
+      if (!cid) {
+        for (const [nid, c] of this.netCars) if ((c.net.slot | 0) === a.slot) { cid = nid; break; }
+        if (!cid && (this.player?.net?.slot | 0) === a.slot) cid = this.multi.myId;
+      }
+      if (!cid) continue;
+      if (cid === this.multi.myId) {
+        this.reconcileLocal(a);
+        continue;
+      }
+      let c = this.netCars.get(cid);
+      if (!c || !(c.ai instanceof RemoteAI)) continue;
+      c.ai.pushSnap({
+        x: a.x, y: a.y, z: a.z, yaw: a.yaw, vx: a.vx, vz: a.vz, av: a.av,
+        h: a.health, f: a.flags, st: 0, th: 0, br: 0, nitro: a.nitro,
+        seq: snap.tick,
+      }, now);
+      c.ai.progress = a.progress;
+      c.health = a.health; c.nitro = a.nitro;
+      c.out = !!(a.flags & F_OUT);
+      if ((a.flags & F_FINISHED) && !c.ai.finished && this.route) { c.ai.finished = true; this.finished.push(c); }
+      if (!(a.flags & F_WRECKED) && c.wrecked) { c.wrecked = false; c.sirenOn = undefined; }
+      else if ((a.flags & F_WRECKED) && !c.wrecked) { c.wrecked = true; c.wreckTime = this.time; c.health = 0; }
+      c.nitroActive = !!(a.flags & F_NITRO_ON);
+    }
+  }
+
+  /** Soft-correct local prediction against server truth (same thresholds as netSmooth). */
+  reconcileLocal(a) {
+    const pl = this.player; if (!pl) return;
+    const dx = a.x - pl.pos.x, dz = a.z - pl.pos.z;
+    const d2 = dx * dx + dz * dz;
+    if (d2 > 225) {
+      pl.pos.set(a.x, a.y, a.z); pl.yaw = a.yaw; pl.vel.set(a.vx, a.vz); pl.angVel = a.av;
+    } else if (d2 > 0.05) {
+      const k = 0.22;
+      pl.pos.x += dx * k; pl.pos.z += dz * k;
+      if (Math.abs(a.y - pl.pos.y) > 0.5) pl.pos.y += (a.y - pl.pos.y) * k;
+      pl.yaw = wrapAngle(pl.yaw + wrapAngle(a.yaw - pl.yaw) * k);
+      pl.vel.x += (a.vx - pl.vel.x) * k; pl.vel.y += (a.vz - pl.vel.y) * k;
+      pl.angVel = lerp(pl.angVel, a.av, k);
+    }
+    pl.health = a.health; pl.nitro = a.nitro;
+    this.playerProgress = Math.max(this.playerProgress || 0, a.progress || 0);
+    if (a.flags & F_FINISHED) this.playerFinished = true;
+    if (a.flags & F_OUT) pl.out = true;
+    if ((a.flags & F_WRECKED) && !pl.wrecked) { pl.wrecked = true; pl.wreckTime = this.time; pl.health = 0; }
+  }
+
   // owner hands a bot's slot (car, position, race progress) to a player who pressed START while the session runs
   assignBot(m) {
+    if (this.serverAuthority()) return;
     const bot = [...this.netCars.values()].find((c) => c.net.bot && !c.wrecked && !c.net.taken);
     if (!bot || !this.multi.net) return;
     bot.net.taken = m.from;
@@ -549,20 +787,54 @@ export class Game {
     this.dropNetCar(bot.net.id);
   }
   netSmooth(dt) {
-    const k = 1 - Math.exp(-dt * 9);
+    const now = performance.now() * 0.001;
+    const rtt = (this.multi.net && this.multi.net.rtt) || 0.08;
+    // Render delay: half RTT + jitter pad. Stay in the buffer so we blend known poses, not guesses.
+    const delay = clamp(rtt * 0.45 + 0.045, 0.055, 0.14);
+    const renderT = now - delay;
     for (const c of this.netCars.values()) {
-      const ai = c.ai; if (!(ai instanceof RemoteAI) || !ai.snap) continue;
-      const s = ai.snap, a = Math.min(ai.age, 0.35);
-      const tx = s.x + s.vx * a, tz = s.z + s.vz * a;
-      const dx = tx - c.pos.x, dz = tz - c.pos.z;
-      if (dx * dx + dz * dz > 144) { c.pos.set(tx, s.y, tz); c.yaw = s.yaw; c.vel.set(s.vx, s.vz); continue; }
-      c.pos.x += dx * k; c.pos.z += dz * k;
-      if (!c.grounded || Math.abs(s.y - c.pos.y) > 3) c.pos.y += (s.y - c.pos.y) * k;
-      c.yaw = wrapAngle(c.yaw + wrapAngle(s.yaw + s.av * a - c.yaw) * k);
-      c.vel.x += (s.vx - c.vel.x) * k; c.vel.y += (s.vz - c.vel.y) * k;
-      c.angVel = s.av;
+      const ai = c.ai; if (!(ai instanceof RemoteAI)) continue;
+      const s = ai.sample(renderT); if (!s) continue;
+      const dx = s.x - c.pos.x, dz = s.z - c.pos.z;
+      const d2 = dx * dx + dz * dz;
+      // Hard snap on big desync (teleport / late join / long stall); otherwise blend hard toward the interp pose
+      if (d2 > 225) {
+        c.pos.set(s.x, s.y, s.z); c.yaw = s.yaw; c.vel.set(s.vx, s.vz); c.angVel = s.av;
+      } else {
+        const rate = s.extrap ? 10 : (ai.lagging ? 6 : 22);
+        const k = 1 - Math.exp(-dt * rate);
+        c.pos.x += dx * k; c.pos.z += dz * k;
+        if (!c.grounded || Math.abs(s.y - c.pos.y) > 2.5) c.pos.y += (s.y - c.pos.y) * k;
+        c.yaw = wrapAngle(c.yaw + wrapAngle(s.yaw - c.yaw) * k);
+        c.vel.x += (s.vx - c.vel.x) * k; c.vel.y += (s.vz - c.vel.y) * k;
+        c.angVel = lerp(c.angVel, s.av, k);
+      }
       c.nitroActive = !!(s.f & 2);
+      if (s.nitro != null) c.nitro = s.nitro;
     }
+  }
+  /** Mid-session host change: take over bot simulation so the pack doesn't freeze when the old host drops. */
+  adoptHost(newHostId) {
+    if (this.serverAuthority()) return;
+    if (!this.multi || !newHostId || this.multi.host === newHostId) return;
+    const was = this.multi.host;
+    this.multi.host = newHostId;
+    if (newHostId !== this.multi.myId) return;
+    const route = this.botRoute || this.route || this.raceRoute();
+    let n = 0;
+    for (const c of this.netCars.values()) {
+      if (!c.net?.bot) continue;
+      c.net.owner = newHostId;
+      if (!(c.ai instanceof RacerAI)) {
+        const lane = c.ai?.lane ?? ((n % 2) ? 3.5 : -3.5);
+        const prog = c.ai?.progress || 0;
+        c.ai = new RacerAI(c, route, 0.97 + (n % 4) * 0.015);
+        c.ai.lane = lane; c.ai.progress = prog;
+        n++;
+      }
+    }
+    if (n) this.notify('HOST', 'You are simulating the pack now', '#3aff90');
+    else if (was !== newHostId) this.notify('HOST', 'You are now the session host', '#3aff90');
   }
   multiRules(dt) {
     if (this.spectating && this.state === 'playing' && !this.aliveHumans().length) { this.endGame(this.spectating.reason, true); return; }
@@ -596,27 +868,48 @@ export class Game {
     for (const c of this.netCars.values()) if (c.net.human && !c.out && !c.wrecked && !c.ai?.finished) out.push(c);
     return out;
   }
+  /** Prefer the lead racer, then nearest human — used on first enter so you don't land on a stuck car. */
+  pickSpecId(alive) {
+    if (!alive.length) return null;
+    if (this.route) {
+      let best = alive[0], bp = -1;
+      for (const c of alive) {
+        const p = c === this.player ? this.playerProgress : (c.ai?.progress || 0);
+        if (p > bp) { bp = p; best = c; }
+      }
+      return best.net.id;
+    }
+    return alive[0].net.id;
+  }
   specTarget() {
     if (!this.spectating) return null;
     const alive = this.aliveHumans(); if (!alive.length) return null;
-    const cur = alive.find((c) => c.net.id === this.spectating.id) || alive[0];
-    this.spectating.id = cur.net.id; return cur;
+    let cur = alive.find((c) => c.net.id === this.spectating.id);
+    if (!cur) {
+      this.spectating.id = this.pickSpecId(alive);
+      cur = alive.find((c) => c.net.id === this.spectating.id) || alive[0];
+      if (this.rig) this.rig.snap = true;
+    }
+    this.spectating.id = cur.net.id;
+    return cur;
   }
   specCycle(dir) {
     if (!this.spectating) return;
     const alive = this.aliveHumans(); if (!alive.length) return;
     const i = Math.max(0, alive.findIndex((c) => c.net.id === this.spectating.id));
     this.spectating.id = alive[(i + dir + alive.length) % alive.length].net.id;
+    if (this.rig) this.rig.snap = true;
     this.audio.click && this.audio.click();
   }
   goSpectator(reason) {
     const alive = this.aliveHumans();
-    this.spectating = { reason, id: alive[0]?.net.id || null };
+    this.spectating = { reason, id: this.pickSpecId(alive) };
     this.pursuit = false; this.bust = 0; this.cooldown = 20; this.heat = 1; this.pursuitTime = 0;
     for (const c of [...this.cops]) { if (c.ai) { c.sirenOn = false; c.ai.target = null; c.ai.retire = true; } }
     const pl = this.player; pl.input.throttle = 0; pl.input.nitro = 0;
-    if (reason === 'busted') { this.audio.busted(); this.notify('BUSTED', 'You are out - spectating', '#ff3050', true); }
-    else { this.notify('WRECKED', 'You are out - spectating', '#ff3050', true); }
+    if (this.rig) { this.rig.snap = true; if (this.rig.mode === 'cockpit' || this.rig.mode === 'hood') this.rig.setMode(0); }
+    if (reason === 'busted') { this.audio.busted(); this.notify('BUSTED', 'You are out — spectating the pack', '#ff3050', true); }
+    else { this.notify('WRECKED', 'You are out — spectating the pack', '#ff3050', true); }
   }
   softFail(reason) {
     // multiplayer free roam: losing doesn't end the session
@@ -663,17 +956,55 @@ export class Game {
     return pool[i % pool.length];
   }
   spawnCop(pos, spec = COP_SPEC) {
-    const c = this.addCar(spec, { role: 'cop' });
+    const military = spec.kind === 'tank';
+    const c = this.addCar(spec, { role: 'cop', military, color: spec.color, color2: spec.color2 });
     c.ai = new CopAI(c, this);
     c.health = 1;
+    if (military) { c.sirenOn = false; c.health = 1.4; }
     this.cops.push(c);
     if (pos) c.place(pos.x, pos.z, pos.yaw || 0, pos.speed || 0);
     return c;
   }
+  spawnHeli(nearPl = true) {
+    const pl = this.player;
+    const h = new Helicopter(this.scene);
+    const n = this.helis.length;
+    h.slot = n;
+    // Always spawn on the lead station (ahead + lane) so they never pop in behind the chase cam
+    const pfx = Math.sin(pl.yaw), pfz = Math.cos(pl.yaw);
+    const prx = -pfz, prz = pfx;
+    const lanes = [0, -18, 18, -34, 34];
+    const lat = lanes[n % lanes.length];
+    const ahead = nearPl ? (55 + (n % 3) * 12) : (90 + Math.random() * 40);
+    h.alt = 16 + (n % 3) * 3.5;
+    h.targetAlt = h.alt;
+    h.place(pl.pos.x + pfx * ahead + prx * lat, pl.pos.z + pfz * ahead + prz * lat, pl.yaw);
+    // Match road speed immediately so they hold the lead instead of getting rear-ended by the pack
+    h.vel.set(pl.vel.x, 0, pl.vel.y);
+    this.helis.push(h);
+    return h;
+  }
+  /** Place a tank ahead/beside the player so chase cam sees armor immediately (not behind the camera). */
+  spawnNearbyTank() {
+    const pl = this.player;
+    const fx = Math.sin(pl.yaw), fz = Math.cos(pl.yaw);
+    const rx = -fz, rz = fx;
+    const n = (this.cops || []).filter((c) => c.military).length;
+    const ahead = 24 + (n % 4) * 14 + Math.random() * 10;
+    const lat = ((n % 2) ? -1 : 1) * (6 + (n % 3) * 5 + Math.random() * 4);
+    const x = pl.pos.x + fx * ahead + rx * lat;
+    const z = pl.pos.z + fz * ahead + rz * lat;
+    const c = this.spawnCop(null, COP_TANK);
+    // Face the player / block the road
+    c.place(x, z, Math.atan2(pl.pos.x - x, pl.pos.z - z), 10);
+    c.ai.target = pl;
+    c.sirenOn = false;
+    return c;
+  }
   spawnInitialTraffic() {
     const nav = this.world.nav;
-    // denser pack so near-misses happen every few seconds on highways
-    const count = this.settings.quality === 0 ? 20 : this.settings.quality === 1 ? 32 : 42;
+    // denser pack so near-misses happen every few seconds on highways (capped harder on Low/Med for GPU)
+    const count = this.settings.quality === 0 ? 10 : this.settings.quality === 1 ? 11 : 28;
     for (let i = 0; i < count; i++) {
       let wsum = 0; for (const t of TRAFFIC_SPECS) wsum += t.w || 1; let wr = Math.random() * wsum; let ts = TRAFFIC_SPECS[0]; for (const t of TRAFFIC_SPECS) { wr -= t.w || 1; if (wr <= 0) { ts = t; break; } }
       const spec = { kind: ts.kind, top: 34, accel: 8, grip: 8, steer: 0.8, mass: ts.kind === 'truck' ? 3 : ts.kind === 'suv' ? 1.6 : 1.1, armor: 1 };
@@ -724,9 +1055,8 @@ export class Game {
         const lat = (oncoming ? -1 : 1) * (3 + Math.random() * 3);
         const x = p.x + -p.dz * lat, z = p.z + p.dx * lat;
         if (!this.cars.some((o) => (o.pos.x - x) ** 2 + (o.pos.z - z) ** 2 < 100)) {
-          const heavy = this.heat >= 4 && Math.random() < 0.3;
-          const c = this.spawnCop(null, heavy ? COP_HEAVY : Math.random() < 0.5 ? COP_SPEC : COP_SPEC2);
-          c.place(x, z, Math.atan2(p.dx, p.dz) + (oncoming ? Math.PI : 0), oncoming ? 18 : 32);
+          const c = this.spawnCop(null, this.pickCopSpec());
+          c.place(x, z, Math.atan2(p.dx, p.dz) + (oncoming ? Math.PI : 0), oncoming ? 18 : (c.military ? 14 : 32));
           c.ai.target = this.pickTarget(c);
           return c;
         }
@@ -740,8 +1070,7 @@ export class Game {
       const ahead = (dx * fx + dz * fz) / d;
       if (Math.random() < 0.6 && ahead > 0.2) continue; // prefer behind/side
       if (this.cars.some((o) => (o.pos.x - n.x) ** 2 + (o.pos.z - n.z) ** 2 < 100)) continue;
-      const heavy = this.heat >= 4 && Math.random() < 0.3;
-      const c = this.spawnCop(null, heavy ? COP_HEAVY : Math.random() < 0.5 ? COP_SPEC : COP_SPEC2);
+      const c = this.spawnCop(null, this.pickCopSpec());
       const toPlX = pl.pos.x - n.x, toPlZ = pl.pos.z - n.z;
       let bestE = n.edges[0], bestDot = -2;
       for (const cand of n.edges) {
@@ -751,11 +1080,25 @@ export class Game {
         if (dot > bestDot) { bestDot = dot; bestE = cand; }
       }
       const m = nav.nodes[bestE.to];
-      c.place(n.x, n.z, Math.atan2(m.x - n.x, m.z - n.z), 20);
+      c.place(n.x, n.z, Math.atan2(m.x - n.x, m.z - n.z), c.military ? 12 : 20);
       c.ai.target = this.pickTarget(c);
       return c;
     }
     return null;
+  }
+  /** Military / BLACKOUT response — folds into normal hot pursuit once heat is high enough (not on the pure-speed oval). */
+  milLive() { return this.heat >= 4 && this.mode !== 'speed' && this.world.mapId !== 'speedway'; }
+
+  pickCopSpec() {
+    if (this.milLive()) {
+      // Heat 4–5 = BLACKOUT PROTOCOL: armor floods the street
+      if (this.heat >= 5 && Math.random() < 0.9) return COP_TANK;
+      if (this.heat >= 4 && Math.random() < 0.75) return COP_TANK;
+      if (Math.random() < 0.4) return COP_HEAVY;
+      return Math.random() < 0.5 ? COP_SPEC : COP_SPEC2;
+    }
+    const heavy = this.heat >= 3 && Math.random() < 0.3;
+    return heavy ? COP_HEAVY : Math.random() < 0.5 ? COP_SPEC : COP_SPEC2;
   }
   pickTarget(cop) {
     if (this.mode === 'free' || !this.racers.length) return this.player;
@@ -792,7 +1135,8 @@ export class Game {
     const slots = hw > 12 ? [-9.5, -3.5, 6] : [-6.5, 3];
     const rb = { cars: [], x: px, z: pz };
     slots.forEach((lat, i) => {
-      const c = this.spawnCop(null, i === 1 && this.heat >= 4 ? COP_HEAVY : COP_SPEC);
+      const armor = this.milLive() || (this.heat >= 4 && i === 1);
+      const c = this.spawnCop(null, armor ? COP_TANK : (i === 1 && this.heat >= 4 ? COP_HEAVY : COP_SPEC));
       const yaw = Math.atan2(dx, dz) + Math.PI / 2 + (i % 2 ? 0.35 : -0.35);
       c.place(px + rx * lat, pz + rz * lat, yaw, 0);
       c.ai.parked = true; c.ai.target = this.player;
@@ -803,12 +1147,12 @@ export class Game {
       this.dropSpike(fake, null, true);
     }
     this.roadblocks.push(rb);
-    this.notify('ROADBLOCK AHEAD', 'Roadblock ahead! Find the gap', '#ff4040');
-    this.radio(`Roadblock is set up ahead. All units hold position.`);
+    this.notify('ROADBLOCK AHEAD', this.milLive() ? 'Armor roadblock ahead!' : 'Roadblock ahead! Find the gap', '#ff4040');
+    this.radio(this.milLive() ? 'Armor blockade is set. Hold the line.' : 'Roadblock is set up ahead. All units hold position.');
   }
 
   dropSpike(cop, target, silent = false, remote = false) {
-    if (!remote && this.multi && this.multi.net && cop === this.player) this.multi.net.send({ t: 'spike', x: cop.pos.x, z: cop.pos.z, yaw: cop.yaw });
+    if (!remote && this.multi && this.multi.net && cop === this.player && !this.serverAuthority()) this.multi.net.send({ t: 'spike', x: cop.pos.x, z: cop.pos.z, yaw: cop.yaw });
     const fx = Math.sin(cop.yaw), fz = Math.cos(cop.yaw);
     const x = cop.pos.x - fx * 7, z = cop.pos.z - fz * 7;
     const g = new THREE.Group();
@@ -883,7 +1227,7 @@ export class Game {
     this.vfx.explosion(car.pos.x, car.pos.y, car.pos.z, car.vel.x, car.vel.y);
     const pl = this.player;
     const byPlayer = by === pl;
-    if (this.multi && car.net && this.multi.net) this.multi.net.send({ t: 'wreck', id: car.net.id, by: by?.net?.id || null });
+    if (this.multi && car.net && this.multi.net && !this.serverAuthority()) this.multi.net.send({ t: 'wreck', id: car.net.id, by: by?.net?.id || null });
     if (car.pos.distanceTo(pl.pos) < 200) this.audio.takedown();
     if (car === pl) {
       if (this.multi && this.mode === 'free') { this.softFail('wrecked'); return; }
@@ -892,9 +1236,13 @@ export class Game {
     }
     if (car.role === 'cop') {
       if (byPlayer) {
-        this.takedowns++; this.bounty += 2500; this.takedownReward();
-        this.notify('TAKEDOWN!', 'Patrol car down  +2500', '#ff3060', true);
-        this.radio(['Unit down! Unit down!', 'We lost a unit!', 'Officer down, requesting backup!'][Math.floor(Math.random() * 3)]);
+        const tank = car.military || car.spec?.kind === 'tank';
+        const payout = tank ? 6000 : 2500;
+        this.takedowns++; this.bounty += payout; this.takedownReward();
+        this.notify('TAKEDOWN!', tank ? `Tank disabled  +${payout}` : `Patrol car down  +${payout}`, '#ff3060', true);
+        this.radio(tank
+          ? ['Armor unit is down!', 'We lost a tank!', 'Heavy asset destroyed!'][Math.floor(Math.random() * 3)]
+          : ['Unit down! Unit down!', 'We lost a unit!', 'Officer down, requesting backup!'][Math.floor(Math.random() * 3)]);
         this.takedownCam(car);
       }
     } else if (car.role === 'racer') {
@@ -926,10 +1274,16 @@ export class Game {
   carCollisions() {
     const cars = this.cars;
     const n = cars.length;
+    const pl = this.player;
+    const px = pl?.pos.x || 0, pz = pl?.pos.z || 0;
+    // Far NPC↔NPC pairs never affect gameplay — skip before the O(n²) body work
+    const farR2 = 55 * 55;
     for (let i = 0; i < n; i++) {
       const a = cars[i]; if (!a.active) continue;
+      const aFar = a !== pl && ((a.pos.x - px) ** 2 + (a.pos.z - pz) ** 2) > farR2;
       for (let j = i + 1; j < n; j++) {
         const b = cars[j]; if (!b.active) continue;
+        if (aFar && b !== pl && ((b.pos.x - px) ** 2 + (b.pos.z - pz) ** 2) > farR2) continue;
         const dx0 = b.pos.x - a.pos.x, dz0 = b.pos.z - a.pos.z;
         if (Math.abs(dx0) > 9 || Math.abs(dz0) > 9) continue;
         if (Math.abs(b.pos.y - a.pos.y) > 2.5) continue;
@@ -1028,6 +1382,7 @@ export class Game {
       if (this.countdown <= 0) {
         this.state = 'playing'; this.hud.countdown('GO!'); this.audio.beep(true);
         if (this.mode === 'free') this.radio('All units, be advised. Street racers reported downtown.');
+        else if (this.mode === 'speed') this.radio('Speedway is hot. Interceptors on the oval — keep the pack honest.');
         else if (this.mode === 'cop') this.radio('All units, racers are on the move. Take them down!');
       }
       // hold cars in place but let player rev
@@ -1057,8 +1412,22 @@ export class Game {
         }
         if (this.mode === 'cop') this.copAbilities(dt);
       } else { pl.input.throttle = 0; pl.input.brake = 0.6; pl.input.nitro = 0; }
-      // AI
-      for (const c of this.cars) if (c.ai && (c !== pl || this.demo)) c.ai.update(dt, this);
+      // AI — skip far traffic/cops (still respawned by updateTraffic); full AI within ~300m of focus
+      const focus = (this.spectating && this.specTarget()) || pl;
+      const fx0 = focus.pos.x, fz0 = focus.pos.z;
+      for (const c of this.cars) {
+        if (!c.ai || (c === pl && !this.demo)) continue;
+        if (c.role === 'traffic' || c.role === 'cop') {
+          const dx = c.pos.x - fx0, dz = c.pos.z - fz0;
+          if (dx * dx + dz * dz > 90000) continue;
+        }
+        c.ai.update(dt, this);
+      }
+      for (const h of this.helis) h.update(dt, this);
+      this.helis = this.helis.filter((h) => {
+        if (h.active) return true;
+        h.dispose(this.scene); return false;
+      });
       this.physics(dt);
       if (this.multi) { this.netSmooth(dt); this.multiRules(dt); this.netSend(dtReal); }
       if (this.demo) this.demoRules(dt); else this.rules(dt);
@@ -1066,8 +1435,8 @@ export class Game {
       this.updateSpikes(dt);
       const cam = this.camera.position;
       const q = this.settings.quality ?? 1;
-      const hideR2 = (q === 0 ? 280 : q === 1 ? 380 : 520) ** 2;
-      const nearR2 = 90 ** 2, fxR2 = 150 ** 2, castR2 = 60 ** 2;
+      const hideR2 = (q === 0 ? 160 : q === 1 ? 185 : 400) ** 2;
+      const nearR2 = (q === 0 ? 42 : q === 1 ? 48 : 55) ** 2, fxR2 = (q === 0 ? 62 : q === 1 ? 78 : 88) ** 2, castR2 = (q >= 2 ? 42 : 20) ** 2;
       for (const c of this.cars) {
         const dx = c.pos.x - cam.x, dz = c.pos.z - cam.z, d2 = dx * dx + dz * dz;
         const isPl = c === pl;
@@ -1090,14 +1459,31 @@ export class Game {
 
   physics(dt) {
     this.acc += dt;
-    const h = 1 / 180; // finer step: 100 m/s cars move <0.6 m per step, so thin rails/posts can't be tunnelled
+    // High: 120 Hz; Med/Low: 90 Hz — city speeds don't need the extra steps, and catch-up is cheaper
+    const q = this.settings.quality ?? 1;
+    const h = 1 / (q >= 2 ? 120 : 90);
+    const maxSteps = q >= 2 ? 8 : 6;
+    const pl = this.player;
+    const focus = (this.spectating && this.specTarget()) || pl;
+    const px = focus?.pos.x || 0, pz = focus?.pos.z || 0;
+    const stepR2 = (q === 0 ? 190 : q === 1 ? 220 : 450) ** 2;
     let steps = 0;
-    while (this.acc >= h && steps < 14) {
-      for (const c of this.cars) c.step(h);
+    while (this.acc >= h && steps < maxSteps) {
+      for (const c of this.cars) {
+        // Far traffic/cops stay parked until respawn/cull — full step only near the focus (player or spectatee)
+        if (c !== pl && c.role !== 'racer' && ((c.pos.x - px) ** 2 + (c.pos.z - pz) ** 2) > stepR2) continue;
+        // Remotes: light coast only — netSmooth owns the pose so full tyre sim doesn't fight the stream
+        if (c.ai instanceof RemoteAI && c.ai.snap) {
+          // Coast in XZ only — netSmooth owns height/yaw authority after the step
+          c.pos.x += c.vel.x * h; c.pos.z += c.vel.y * h;
+          continue;
+        }
+        c.step(h);
+      }
       this.carCollisions();
       this.acc -= h; steps++;
     }
-    if (steps >= 14) this.acc = 0;
+    if (steps >= maxSteps) this.acc = 0;
   }
 
   resetPlayer() {
@@ -1162,22 +1548,24 @@ export class Game {
       // wrong way
       const p = pointAtDist(this.route, this.playerProgress, {});
       this.wrongWay = pl.speed > 8 && (pl.vel.x * p.dx + pl.vel.y * p.dz) / pl.speed < -0.5;
-      // checkpoints
+      // checkpoints (server-authority Speedway: finish is owned by the match server)
       if (this.state === 'playing' && this.checkIdx < this.checkpoints.length && this.playerProgress >= this.checkpoints[this.checkIdx]) {
         this.checkIdx++;
         if (this.checkIdx >= this.checkpoints.length) {
-          if (this.mode === 'race') this.finishRace();
+          if (!this.serverAuthority() && (this.mode === 'race' || this.mode === 'speed')) this.finishRace();
+          else if (this.serverAuthority()) { /* wait for server finish event */ }
           else { this.audio.checkpoint(); }
         } else {
           this.audio.checkpoint();
           this.notify('CHECKPOINT', `${this.checkIdx}/${this.checkpoints.length - 1}   ${fmtTime(this.raceTime)}`, '#ffb400');
-          if (this.mode === 'race') pl.nitro = Math.min(1, pl.nitro + 0.1);
+          if (this.mode === 'race' || this.mode === 'speed') pl.nitro = Math.min(1, pl.nitro + 0.1);
         }
         this.updateGate();
       }
       // AI racers finishing
       for (const r of this.racers) {
         if (r === pl || !r.ai || r.ai.finished || r.wrecked) continue;
+        if (this.serverAuthority()) continue;
         if (r.ai.progress >= this.finishDist) {
           r.ai.finished = true; this.finished.push(r);
           if (this.mode === 'cop') {
@@ -1196,7 +1584,7 @@ export class Game {
         if (remaining === 0 && this.state === 'playing') this.endGame('cop_done');
       }
     }
-    // --- pursuit (race & free) ---
+    // --- pursuit (race, free, speed) — BLACKOUT armor kicks in at heat 4+ ---
     if (this.mode !== 'cop') this.pursuitRules(dt);
     else {
       // partner cops retarget
@@ -1241,6 +1629,7 @@ export class Game {
 
   demoRules(dt) {
     const pl = this.player;
+    if (!pl?.ai || !this.demoRoute) return;
     for (const c of this.cars) c.health = Math.max(c.health, 0.8);
     if (pl.ai.progress > this.demoRoute.length - 200 || (pl.speed < 1 && this.time > 5 && Math.random() < dt * 0.2)) { this.start('demo'); }
     for (const c of this.cops) if (c.pos.distanceTo(pl.pos) > 400) { const q = pointAtDist(this.demoRoute, pl.ai.progress - 60, {}); c.place(q.x, q.z, Math.atan2(q.dx, q.dz), pl.speed); }
@@ -1255,43 +1644,52 @@ export class Game {
   pursuitRules(dt) {
     const pl = this.player;
     const active = this.cops.filter((c) => !c.wrecked);
-    if (this.mode === 'race') {
-      this.pursuit = this.raceTime > 8;
-      this.heat = this.pursuit ? clamp(1 + Math.floor(this.raceTime / 32), 1, 5) : 0;
+    if (this.mode === 'race' || this.mode === 'speed') {
+      this.pursuit = this.mode === 'speed' ? true : this.raceTime > 8;
+      const ramp = this.mode === 'speed' ? 22 : 32;
+      this.heat = this.pursuit ? clamp(1 + Math.floor(this.raceTime / ramp), 1, 5) : 0;
     } else {
-      // free roam: detection & escape
+      // free: detection & escape (helis also keep you "seen")
       let seen = false;
       for (const c of active) {
         if (c.ai.parked) continue;
         const d = c.pos.distanceTo(pl.pos);
         if (d < 70 || (d < 230 && this.world.statics.los(c.pos.x, c.pos.z, pl.pos.x, pl.pos.z))) { seen = true; break; }
       }
+      if (!seen) {
+        const heliR = this.milLive() ? 280 : 120;
+        for (const h of this.helis) {
+          if (!h.active) continue;
+          if (Math.hypot(h.pos.x - pl.pos.x, h.pos.z - pl.pos.z) < heliR) { seen = true; break; }
+        }
+      }
       if (this.pursuit) {
         this.pursuitTime += dt;
         if (seen) this.lastSeen = 0; else this.lastSeen += dt;
-        this.heat = clamp(Math.max(this.heat, 1 + Math.floor(this.pursuitTime / 40) + Math.floor(this.takedowns / 3)), 1, 5);
-        this.bounty += dt * (10 + this.heat * 15) * (pl.speed > 30 ? 2 : 1);
-        if (this.lastSeen > 14 && !active.some((c) => !c.ai.retire && !c.ai.parked && c.pos.distanceTo(pl.pos) < 160)) {
-          // escaped
+        const ramp = this.milLive() ? 28 : 40;
+        this.heat = clamp(Math.max(this.heat, 1 + Math.floor(this.pursuitTime / ramp) + Math.floor(this.takedowns / 3)), 1, 5);
+        this.bounty += dt * (10 + this.heat * (this.milLive() ? 22 : 15)) * (pl.speed > 30 ? 2 : 1);
+        const escapeT = this.milLive() ? 22 : 14;
+        const heliEscapeR = this.milLive() ? 260 : 140;
+        if (this.lastSeen > escapeT && !active.some((c) => !c.ai.retire && !c.ai.parked && c.pos.distanceTo(pl.pos) < 160) && !this.helis.some((h) => h.active && Math.hypot(h.pos.x - pl.pos.x, h.pos.z - pl.pos.z) < heliEscapeR)) {
           this.pursuit = false; this.escapes++;
-          const bonus = 3000 * this.heat;
+          const bonus = (this.milLive() ? 5000 : 3000) * this.heat;
           this.bounty += bonus;
           this.notify('ESCAPED!', `Escaped  +${bonus}`, '#30ff90', true);
           this.audio.victory();
-          this.radio('We lost the suspect. All units return to patrol.');
-          for (const c of [...this.cops]) if (c.pos.distanceTo(pl.pos) > 100 || true) { c.sirenOn = false; c.ai.target = null; c.ai.retire = true; }
-          this.cooldown = 20; this.heat = Math.max(1, this.heat - 1);
+          this.radio(this.milLive() ? 'Blackout units, stand down. Suspect is dark.' : 'We lost the suspect. All units return to patrol.');
+          for (const c of [...this.cops]) { c.sirenOn = false; c.ai.target = null; c.ai.retire = true; }
+          for (const h of this.helis) h.active = false;
+          this.cooldown = this.milLive() ? 14 : 20; this.heat = Math.max(1, this.heat - 1);
         }
       } else {
         this.cooldown -= dt;
         if (this.cooldown < -28 && this.raceTime > 10) {
-          // dispatch: a witness reported the player
           this.pursuit = true; this.lastSeen = -20; this.pursuitTime = 0; this.cooldown = 0;
           for (const k of active) if (k.ai.patrol) { k.ai.patrol = false; k.sirenOn = true; k.ai.target = pl; }
           this.notify('PURSUIT!', 'Pursuit started — you were reported', '#ff3050', true);
           this.radio(`Dispatch, we have a report of a street racer near ${this.areaName(pl)}. All units respond.`);
         }
-        // patrols
         const patrols = active.filter((c) => c.ai.patrol);
         if (this.cooldown <= 0 && patrols.length < 2 && this.raceTime > 3) {
           const c = this.spawnPursuitCop();
@@ -1309,31 +1707,45 @@ export class Game {
           }
         }
       }
-      // retire cops after escape
       for (const c of [...this.cops]) if (c.ai.retire && c.pos.distanceTo(pl.pos) > 160 && this.distToCamera(c) > 120) this.removeCar(c);
     }
     // spawn cops per heat
     this.copSpawnCd -= dt;
     if (this.pursuit) {
-      const want = [0, 2, 3, 4, 5, 6][this.heat] + (this.mode === 'race' ? 0 : 0);
+      const mil = this.milLive();
+      const want = mil ? [0, 4, 6, 8, 10, 14][this.heat] : [0, 2, 3, 4, 5, 6][this.heat];
       const chasing = active.filter((c) => !c.ai.parked && !c.ai.retire).length;
       if (chasing < want && this.copSpawnCd <= 0) {
         const c = this.spawnPursuitCop();
-        this.copSpawnCd = 4;
-        if (c && Math.random() < 0.4) this.radio(`Unit responding. Suspect heading ${this.headingWord(pl)}.`);
+        this.copSpawnCd = mil ? 1.8 : (this.mode === 'speed' ? 2.5 : 4);
+        if (c && Math.random() < 0.4) {
+          this.radio(c.military
+            ? `Armor unit rolling. Suspect heading ${this.headingWord(pl)}.`
+            : `Unit responding. Suspect heading ${this.headingWord(pl)}.`);
+        }
+      }
+      // BLACKOUT PROTOCOL (heat 4+): tanks + helis join normal hot pursuit
+      if (mil) {
+        const wantHeli = this.heat >= 5 ? 5 : 3;
+        while (this.helis.filter((h) => h.active).length < wantHeli) this.spawnHeli();
+        const tanksNear = this.cops.filter((c) => c.military && !c.wrecked && c.pos.distanceTo(pl.pos) < 180).length;
+        const wantNearTank = this.heat >= 5 ? 5 : 3;
+        if (tanksNear < wantNearTank && this.copSpawnCd <= 0.5) this.spawnNearbyTank();
       }
       // heat change notifications
       if (this.heat !== this.lastHeat) {
         if (this.lastHeat !== undefined && this.heat > this.lastHeat) {
-          this.notify(`HEAT LEVEL ${this.heat}`, ['', '', 'Backup units approaching', 'Roadblocks deploying', 'Armored SUVs dispatched', 'All units responding'][this.heat], '#ff4040');
-          this.radio(['', '', 'Requesting backup!', 'Setting up roadblocks!', 'Sending in the heavies!', 'All units, maximum pursuit authorized!'][this.heat]);
+          const msgs = ['', '', 'Backup units approaching', 'Roadblocks deploying', 'BLACKOUT — armor inbound', 'Full blackout — tanks & air live'];
+          const radios = ['', '', 'Requesting backup!', 'Setting up roadblocks!', 'Blackout protocol is live. Armor authorized!', 'Blackout maximum — no escape routes!'];
+          this.notify(this.heat >= 4 ? 'BLACKOUT PROTOCOL' : `HEAT LEVEL ${this.heat}`, msgs[this.heat], this.heat >= 4 ? '#c8ff40' : '#ff4040');
+          this.radio(radios[this.heat]);
           this.punch('heatUp', 0.7 + this.heat * 0.1);
         }
         this.lastHeat = this.heat;
       }
       // roadblocks
       this.roadblockCd -= dt;
-      if (this.heat >= 3 && this.roadblockCd <= 0) { this.roadblockCd = 40 - this.heat * 4; this.spawnRoadblock(); }
+      if (this.heat >= 3 && this.roadblockCd <= 0) { this.roadblockCd = (mil ? 28 : 40) - this.heat * 4; this.spawnRoadblock(); }
       // retarget
       for (const c of active) {
         if (c.ai.patrol || c.ai.retire) continue;
@@ -1473,7 +1885,7 @@ export class Game {
   endGame(reason, force = false) {
     if (this.state === 'ending' || this.state === 'result') return;
     if (this.spectating && !force && (reason === 'busted' || reason === 'wrecked' || reason === 'wrecked_cop')) return; // already out and watching
-    if (!force && this.multi && this.multi.net && reason === 'busted') this.multi.net.send({ t: 'bust', id: this.multi.myId, name: this.player.name });
+    if (!force && this.multi && this.multi.net && reason === 'busted' && !this.serverAuthority()) this.multi.net.send({ t: 'bust', id: this.multi.myId, name: this.player.name });
     if (this.multi && this.mode === 'free' && (reason === 'busted' || reason === 'wrecked')) { if (this.respawnT <= 0) this.softFail(reason); return; }
     // multiplayer race / interceptor: dying while other real players are still going puts you in spectator mode
     if (!force && this.multi && this.state === 'playing' && (reason === 'busted' || reason === 'wrecked' || reason === 'wrecked_cop') && this.aliveHumans().length > 0) { this.goSpectator(reason); return; }
@@ -1555,27 +1967,36 @@ export class Game {
       if (Lh.castShadow !== sh) Lh.castShadow = sh;
     }
     // flood = short wide fill for the foreground and kerbs (stops the "tunnel vision" look)
+    const mountY = (mounts[0].y + mounts[1].y) * 0.5;
     const useFlood = q >= 2;
-    this.headFlood.intensity = useFlood ? (night ? 55 : 0) * this._lampOn : 0;
+    this.headFlood.intensity = useFlood ? (night ? 40 : 0) * this._lampOn : 0;
     if (useFlood) {
-      const c = new THREE.Vector3(0, 0.62, pl.dims.L / 2 - 0.1).applyMatrix4(M);
+      const c = new THREE.Vector3(0, mountY * 0.85, pl.dims.L / 2 - 0.1).applyMatrix4(M);
       this.headFlood.position.copy(c);
       this.headFlood.target.position.copy(c).addScaledVector(fwd, 12).addScaledVector(up, -2.2);
       this.headFlood.target.updateMatrixWorld();
     }
     // bounce light off the road onto the bumper/hood (stays below the bodywork, never a floating blob)
-    this.headFill.intensity = (night ? (q === 0 ? 3 : 5) : 0.6) * this._lampOn;
-    this.headFill.position.copy(new THREE.Vector3(0, 0.35, pl.dims.L / 2 + 1.6).applyMatrix4(M));
+    this.headFill.intensity = (night ? (q === 0 ? 2.5 : 3.5) : 0.55) * this._lampOn;
+    this.headFill.position.copy(new THREE.Vector3(0, Math.min(0.4, mountY * 0.55), pl.dims.L / 2 + 1.6).applyMatrix4(M));
     const braking = pl.input && pl.input.brake > 0.1 && pl.vF > 1;
     this.brakeGlow.intensity = q === 0 ? 0 : (braking ? (night ? 24 : 5) : (night ? 4 : 0));
-    this.brakeGlow.position.copy(new THREE.Vector3(0, 0.55, -pl.dims.L / 2 - 0.3).applyMatrix4(M));
+    this.brakeGlow.position.copy(new THREE.Vector3(0, mountY * 0.85, -pl.dims.L / 2 - 0.3).applyMatrix4(M));
+    // day: dim head flare sprites so they don't glare like suns; night: full base
+    const headMul = night ? 1 : 0.35;
+    for (const h of pl.model.heads || []) {
+      if (h.userData.lamp !== 'head') continue;
+      const s = (h.userData.baseScale || 1) * headMul;
+      h.scale.set(s, s, 1);
+      h.material.opacity = Math.min(1, (h.userData.baseOpacity || 0.7) * (night ? 1 : 0.4));
+    }
     // volumetric shafts: only meaningful at night, in fog/haze; follow the lamps exactly
     const bg = this.beamGroup;
     if (bg) {
       const show = q > 0 && night;
       bg.visible = show;
       if (show) {
-        this.beamUniforms.uOpacity.value = (high ? 0.16 : 0.11) * this._lampOn;
+        this.beamUniforms.uOpacity.value = (high ? 0.14 : 0.1) * this._lampOn;
         this.beamUniforms.uGround.value = this.world.heightAt(pl.pos.x, pl.pos.z);
         bg.children.forEach((m, i) => {
           m.position.copy(this.headlights[useDual ? i : 0].position);
@@ -1602,11 +2023,13 @@ export class Game {
       if (d < 42 && this.pursuit) mode = d < 22 ? 3 : 1;
       sir.push({ gain, dist: c === pl ? 0 : d, vrel: c === pl ? 0 : vrel, pan: c === pl ? 0 : -pan, mode });
     }
+    const q = this.settings.quality ?? 1;
     const others = [];
+    const otherR2 = (q >= 2 ? 140 : 110) ** 2;
     for (const c of this.cars) {
       if (c === pl || c.wrecked) continue;
       const dx = c.pos.x - pl.pos.x, dz = c.pos.z - pl.pos.z, d2 = dx * dx + dz * dz;
-      if (d2 > 140 * 140) continue;
+      if (d2 > otherR2) continue;
       const d = Math.sqrt(d2) || 1;
       const vrel = ((c.vel.x - pl.vel.x) * dx + (c.vel.y - pl.vel.y) * dz) / d;
       const pan = (dx * -camR.z + dz * camR.x) / d;
@@ -1619,13 +2042,15 @@ export class Game {
     others.sort((x, y) => x.d - y.d);
     const fp = (this.rig.mode === 'cockpit' || this.rig.mode === 'hood') && !this.rig.cine;
     const active = !this.demo && (this.state === 'playing' || this.state === 'countdown' || this.state === 'ending');
+    // Med/Low: fewer ambient engine voices — audio graph cost shows up under chase density
+    const otherN = q >= 2 ? 4 : q === 1 ? 2 : 1;
     a.update(dt, {
       active, rpm: pl.rpm, throttle: pl.input.throttle, brake: pl.input.brake, handbrake: pl.input.handbrake,
       speed: pl.speed, vF: pl.vF, gear: pl.gear, shiftTimer: pl.shiftTimer || 0,
       skid: pl.skidAmt || 0, slip: Math.abs(pl.slip || 0), drifting: pl.drifting,
       offroad: pl.offroad && pl.grounded, grounded: pl.grounded, flat: pl.flatTimer > 0,
       nitro: pl.nitroActive, shifted: pl.shifted, kind: pl.spec.kind, carId: pl.spec.id,
-      fp, sirens: sir, others: others.slice(0, 4),
+      fp, sirens: sir, others: others.slice(0, otherN),
     });
     pl.shifted = 0;
     // music intensity — chase / heat drive the drama bed; escape cools it
@@ -1635,7 +2060,7 @@ export class Game {
       else if (this.pursuit) {
         if (this.mode === 'free' && this.lastSeen > 6) lvl = 1; // losing them: music drops
         else lvl = this.heat >= 4 ? 3 : this.heat >= 2 ? 2 : 1;
-        if (this.heat >= 5 || (pl.nitroActive && this.heat >= 3)) lvl = 3;
+        if (this.heat >= 5 || (pl.nitroActive && this.heat >= 3) || (this.milLive() && this.helis.length) || this.mode === 'speed') lvl = 3;
       } else if (pl.speed > 60) lvl = 2;
       a.music.setLevel(lvl);
       a.setDrama?.(lvl, this.pursuit ? this.heat : 0);

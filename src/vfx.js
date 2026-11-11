@@ -38,18 +38,21 @@ class ParticlePool {
     this.parts = [];
     for (let i = 0; i < max; i++) this.parts.push({ life: 0, max: 1, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, s0: 1, s1: 1, a0: 1, r: 1, g: 1, b: 1, rot: 0, vr: 0, drag: 1, grav: 0 });
     this.cursor = 0;
+    this.liveMax = max; // quality can shrink the active ring without reallocating
     this._uploadTo = 0; // high-water mark of slots that need GPU upload
   }
   emit(o) {
-    const p = this.parts[this.cursor]; this.cursor = (this.cursor + 1) % this.max;
+    const n = this.liveMax || this.max;
+    const p = this.parts[this.cursor]; this.cursor = (this.cursor + 1) % n;
     p.life = p.max = o.life; p.x = o.x; p.y = o.y; p.z = o.z; p.vx = o.vx || 0; p.vy = o.vy || 0; p.vz = o.vz || 0;
     p.s0 = o.s0; p.s1 = o.s1; p.a0 = o.a; p.r = o.r; p.g = o.g; p.b = o.b; p.rot = Math.random() * 6.28; p.vr = (Math.random() - 0.5) * (o.spin || 1);
     p.drag = o.drag ?? 1.5; p.grav = o.grav || 0; p.fadeIn = o.fadeIn || 0;
   }
   update(dt) {
     const P = this.parts;
+    const nMax = this.liveMax || this.max;
     let hi = 0;
-    for (let i = 0; i < this.max; i++) {
+    for (let i = 0; i < nMax; i++) {
       const p = P[i];
       if (p.life <= 0) { this.alpha[i] = 0; this.size[i] = 0; continue; }
       hi = i + 1;
@@ -127,7 +130,7 @@ class SkidMarks {
 export class VFX {
   constructor(scene) {
     this.scene = scene;
-    this.smoke = new ParticlePool(scene, 1400, smokeTexture(), THREE.NormalBlending);
+    this.smoke = new ParticlePool(scene, 900, smokeTexture(), THREE.NormalBlending);
     this.glow = new ParticlePool(scene, 900, glowTexture('rgba(255,255,255,1)', 'rgba(255,255,255,0)', 64), THREE.AdditiveBlending);
     this.skids = new SkidMarks(scene);
     // debris
@@ -150,16 +153,27 @@ export class VFX {
     // EMP shell
     this.empMesh = new THREE.Mesh(new THREE.SphereGeometry(3.2, 24, 16), new THREE.MeshBasicMaterial({ color: new THREE.Color(0.3, 0.8, 3), transparent: true, opacity: 0.25, blending: THREE.AdditiveBlending, depthWrite: false, wireframe: true }));
     this.empMesh.visible = false; scene.add(this.empMesh);
+    this.emitMul = 1;
   }
 
   setScale(pxScale) { this.smoke.mat.uniforms.uScale.value = pxScale; this.glow.mat.uniforms.uScale.value = pxScale; }
+  setQuality(q) {
+    this.emitMul = q === 0 ? 0.35 : q === 1 ? 0.55 : 1;
+    // Shrink the sim/upload ring on Med/Low — full 900×2 pools still allocated, just not walked
+    const n = q === 0 ? 260 : q === 1 ? 420 : 900;
+    this.smoke.liveMax = n; this.glow.liveMax = n;
+    if (this.smoke.cursor >= n) this.smoke.cursor = 0;
+    if (this.glow.cursor >= n) this.glow.cursor = 0;
+  }
 
   tireSmoke(x, y, z, vx, vz, intensity, dark = false) {
+    if (Math.random() > this.emitMul) return;
     const c = dark ? 0.35 : 0.85;
     this.smoke.emit({ x: x + (Math.random() - 0.5) * 0.4, y: y + 0.3, z: z + (Math.random() - 0.5) * 0.4, vx: vx * 0.2 + (Math.random() - 0.5) * 2, vy: 0.8 + Math.random(), vz: vz * 0.2 + (Math.random() - 0.5) * 2,
       life: 1.4 + Math.random() * 1.2, s0: 1.2, s1: 6 + intensity * 4, a: 0.22 * intensity + 0.08, r: c, g: c * 0.98, b: c * 0.96, drag: 1.4, fadeIn: 0.1 });
   }
   dust(x, y, z, vx, vz, intensity) {
+    if (Math.random() > this.emitMul) return;
     this.smoke.emit({ x, y: y + 0.2, z, vx: vx * 0.3 + (Math.random() - 0.5) * 2, vy: 0.5 + Math.random(), vz: vz * 0.3 + (Math.random() - 0.5) * 2,
       life: 1.5 + Math.random(), s0: 1.5, s1: 7, a: 0.25 * intensity, r: 0.62, g: 0.52, b: 0.4, drag: 1.2, fadeIn: 0.1 });
   }

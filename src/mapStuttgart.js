@@ -65,10 +65,10 @@ export function buildStuttgartSky(scene, renderer, world) {
   gnd.rotation.x = -Math.PI / 2; gnd.position.y = -30; envScene.add(gnd);
   // Warm city-glow bands for car paint reflections
   for (const [nx, ny, nz, nw, nh, ry, nc] of [
-    [0, 90, -380, 220, 70, 0, new THREE.Color(2.2, 1.1, 0.45)],
-    [380, 85, 0, 200, 65, Math.PI / 2, new THREE.Color(1.6, 0.9, 0.5)],
-    [0, 95, 380, 220, 70, Math.PI, new THREE.Color(0.5, 0.7, 1.6)],
-    [-380, 80, 0, 200, 60, -Math.PI / 2, new THREE.Color(2.0, 0.7, 0.3)],
+    [0, 90, -380, 220, 70, 0, new THREE.Color(1.1, 0.55, 0.22)],
+    [380, 85, 0, 200, 65, Math.PI / 2, new THREE.Color(0.8, 0.45, 0.25)],
+    [0, 95, 380, 220, 70, Math.PI, new THREE.Color(0.25, 0.35, 0.8)],
+    [-380, 80, 0, 200, 60, -Math.PI / 2, new THREE.Color(1.0, 0.35, 0.15)],
   ]) {
     const m = new THREE.Mesh(new THREE.PlaneGeometry(nw, nh), new THREE.MeshBasicMaterial({ color: nc, side: THREE.DoubleSide }));
     m.position.set(nx, ny, nz); m.rotation.y = ry; envScene.add(m);

@@ -6,7 +6,7 @@ function canvas(w, h) { const c = document.createElement('canvas'); c.width = w;
 function tex(c, repeat = true, srgb = true) {
   const t = new THREE.CanvasTexture(c);
   if (repeat) { t.wrapS = t.wrapT = THREE.RepeatWrapping; }
-  t.anisotropy = 8;
+  t.anisotropy = 16; // reduces road/building shimmer at grazing angles (cheap on modern GPUs)
   if (srgb) t.colorSpace = THREE.SRGBColorSpace;
   t.needsUpdate = true;
   return t;

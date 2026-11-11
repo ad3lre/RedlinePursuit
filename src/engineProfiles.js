@@ -4,6 +4,9 @@
 //   kaiser  → twin-turbo straight-6 GT (BMW M-style)
 //   bruiser → cross-plane American V8 muscle
 //   cyber   → dual-motor EV (Cybertruck)
+//   model_s → Tesla Model S P100D EV
+//   mclaren → McLaren 720S twin-turbo V8
+//   gwagon  → Mercedes-AMG G 63 bi-turbo V8
 //   gt3rs   → Porsche flat-6 NA track car
 //   vito    → Mercedes diesel van
 //   mini    → turbocharged Mini Cooper S I4
@@ -55,7 +58,7 @@ export const CAR_ENGINES = {
     turbo: 0, whine: 0.55, burble: 1.15, diesel: 0, electric: 0, red: 0.94,
     intake: 0.85, body: 1.15,
     gears: [2.66, 1.78, 1.30, 1.00, 0.74, 0.50], finalDrive: 3.07,
-    shiftSpeeds: [15, 28, 42, 58, 74],
+    shiftSpeeds: [16, 30, 45, 61, 78],
   },
   // Twin-turbo I6 GT — refined idle, angry midrange, strong spool whistle
   kaiser: {
@@ -66,7 +69,7 @@ export const CAR_ENGINES = {
     turbo: 1.25, whine: 0.7, burble: 1.2, diesel: 0, electric: 0, red: 0.93,
     intake: 1.05, body: 1.0,
     gears: [4.11, 2.32, 1.55, 1.18, 1.00, 0.85], finalDrive: 3.15,
-    shiftSpeeds: [14, 27, 42, 58, 78],
+    shiftSpeeds: [15, 28, 43, 59, 75],
   },
   // Cross-plane pushrod V8 — half-order lope, chest thump, overrun burble
   bruiser: {
@@ -77,7 +80,7 @@ export const CAR_ENGINES = {
     turbo: 0.15, whine: 0.4, burble: 1.55, diesel: 0, electric: 0, red: 0.92,
     intake: 0.7, body: 1.25,
     gears: [2.97, 2.07, 1.43, 1.00, 0.84, 0.57], finalDrive: 3.73,
-    shiftSpeeds: [14, 26, 40, 55, 70],
+    shiftSpeeds: [14, 25, 38, 51, 64],
   },
   // Dual-motor EV — no combustion; PWM inverter + gear reduction whine
   cyber: {
@@ -90,7 +93,18 @@ export const CAR_ENGINES = {
     gears: [1], finalDrive: 9.0,
     shiftSpeeds: [],
   },
-  // Porsche flat-6 NA — metallic high-rev scream, intake snarl, PDK snap
+  // Tesla Model S P100D — tri-motor-class EV whine, higher pitched than the Cybertruck
+  model_s: {
+    layout: 'ev', cyl: 1, idleRpm: 0, redlineRpm: 18000,
+    sub: 0.35, h05: 0, h15: 0.12, h2: 0.4, h3: 0.65, h4: 0.8,
+    lope: 0, lopeAmt: 0,
+    fA: 110, fB: 520, fC: 2800, qA: 2.0, qB: 1.9, qC: 5.0,
+    turbo: 0, whine: 1.55, burble: 0, diesel: 0, electric: 1, red: 0.98,
+    intake: 0.12, body: 0.8,
+    gears: [1], finalDrive: 9.2,
+    shiftSpeeds: [],
+  },
+  // Porsche flat-6 NA — metallic high-rev scream, intake snarl, 7-speed PDK snap
   gt3rs: {
     layout: 'f6', cyl: 6, idleRpm: 900, redlineRpm: 9000,
     sub: 0.22, h05: 0.05, h15: 0.55, h2: 0.62, h3: 0.48, h4: 0.42,
@@ -98,8 +112,8 @@ export const CAR_ENGINES = {
     fA: 210, fB: 980, fC: 2650, qA: 3.2, qB: 4.5, qC: 3.6,
     turbo: 0, whine: 1.15, burble: 0.85, diesel: 0, electric: 0, red: 0.95,
     intake: 1.35, body: 1.05,
-    gears: [3.75, 2.38, 1.72, 1.34, 1.11, 0.96], finalDrive: 4.00,
-    shiftSpeeds: [16, 30, 46, 62, 80],
+    gears: [3.75, 2.38, 1.72, 1.34, 1.11, 0.96, 0.84], finalDrive: 4.00,
+    shiftSpeeds: [15, 27, 39, 51, 63, 74],
   },
   // Mercedes diesel van — low-rev clatter, turbo whistle, soft exhaust
   vito: {
@@ -110,9 +124,31 @@ export const CAR_ENGINES = {
     turbo: 1.1, whine: 0.35, burble: 0.15, diesel: 1, electric: 0, red: 0.90,
     intake: 0.55, body: 0.95,
     gears: [4.40, 2.40, 1.50, 1.00, 0.80, 0.65], finalDrive: 3.45,
-    shiftSpeeds: [12, 22, 34, 48, 62],
+    shiftSpeeds: [10, 18, 28, 38, 48],
   },
-  // Koenigsegg Jesko: 5.0 L twin-turbo flat-plane V8 (1600 hp on E85), 8500 rpm redline, Light Speed 9-speed (modelled as 7 ratios)
+  // Mercedes-AMG G 63: 4.0 L hot-V twin-turbo V8, deep AMG burble, soft 9-speed shifts
+  gwagon: {
+    layout: 'v8', cyl: 8, idleRpm: 650, redlineRpm: 6500,
+    sub: 0.55, h05: 0.22, h15: 0.28, h2: 0.48, h3: 0.28, h4: 0.16,
+    lope: 7.5, lopeAmt: 0.12,
+    fA: 120, fB: 420, fC: 1400, qA: 3.8, qB: 2.8, qC: 2.4,
+    turbo: 1.2, whine: 0.55, burble: 0.9, diesel: 0, electric: 0, red: 0.93,
+    intake: 0.7, body: 1.15,
+    gears: [5.35, 3.24, 2.25, 1.64, 1.21, 1.00, 0.86, 0.72, 0.60], finalDrive: 3.27,
+    shiftSpeeds: [12, 22, 34, 46, 56, 64, 72, 80],
+  },
+  // McLaren 720S: 4.0 L twin-turbo flat-plane V8, 7500 rpm, 7-speed SSG — high-pitched, wastegate chatter
+  mclaren: {
+    layout: 'v8', cyl: 8, idleRpm: 850, redlineRpm: 7500,
+    sub: 0.28, h05: 0.03, h15: 0.4, h2: 0.58, h3: 0.5, h4: 0.42,
+    lope: 11, lopeAmt: 0.04,
+    fA: 200, fB: 920, fC: 2550, qA: 3.2, qB: 4.4, qC: 3.8,
+    turbo: 1.45, whine: 1.25, burble: 1.0, diesel: 0, electric: 0, red: 0.96,
+    intake: 1.45, body: 0.9,
+    gears: [3.98, 2.61, 1.90, 1.48, 1.16, 0.91, 0.69], finalDrive: 3.31,
+    shiftSpeeds: [16, 28, 42, 56, 72, 88],
+  },
+  // Koenigsegg Jesko: 5.0 L twin-turbo flat-plane V8 (1600 hp on E85), 8500 rpm redline, 9-speed Light Speed Transmission
   jesko: {
     layout: 'v8', cyl: 8, idleRpm: 900, redlineRpm: 8500,
     sub: 0.34, h05: 0.04, h15: 0.35, h2: 0.55, h3: 0.46, h4: 0.34,
@@ -120,8 +156,8 @@ export const CAR_ENGINES = {
     fA: 190, fB: 860, fC: 2400, qA: 3.4, qB: 4.2, qC: 3.4,
     turbo: 1.3, whine: 1.3, burble: 1.1, diesel: 0, electric: 0, red: 0.96,
     intake: 1.4, body: 0.95,
-    gears: [3.50, 2.45, 1.85, 1.50, 1.25, 1.05, 0.90], finalDrive: 3.60,
-    shiftSpeeds: [17, 32, 48, 66, 86, 108],
+    gears: [4.72, 3.64, 2.87, 2.25, 1.77, 1.42, 1.15, 0.96, 0.82], finalDrive: 3.30,
+    shiftSpeeds: [20, 36, 53, 71, 90, 108, 123, 134],
   },
   // Toyota Corolla 2.0 Dynamic Force I4 (M20A-FKS, NA) — smooth, unobtrusive, CVT-style long gearing
   corolla: {
@@ -132,7 +168,7 @@ export const CAR_ENGINES = {
     turbo: 0, whine: 0.35, burble: 0.2, diesel: 0, electric: 0, red: 0.94,
     intake: 0.9, body: 0.85,
     gears: [3.38, 2.04, 1.40, 1.04, 0.82, 0.66], finalDrive: 3.94,
-    shiftSpeeds: [12, 22, 33, 45, 57],
+    shiftSpeeds: [10, 18, 27, 37, 46],
   },
   // Mini Cooper S turbo I4 — raspy, induction whoosh, wastegate chirp
   mini: {
@@ -143,7 +179,18 @@ export const CAR_ENGINES = {
     turbo: 1.05, whine: 0.5, burble: 0.9, diesel: 0, electric: 0, red: 0.93,
     intake: 1.2, body: 0.95,
     gears: [3.92, 2.29, 1.61, 1.21, 1.00, 0.84], finalDrive: 3.59,
-    shiftSpeeds: [13, 24, 38, 52, 66],
+    shiftSpeeds: [12, 22, 34, 46, 58],
+  },
+  // Honda Civic Type R EK9: B16B 1.6 L VTEC I4 — 8400 rpm, intake howl, hard 5-speed
+  civic: {
+    layout: 'i4', cyl: 4, idleRpm: 900, redlineRpm: 8400,
+    sub: 0.2, h05: 0.05, h15: 0.28, h2: 0.55, h3: 0.42, h4: 0.32,
+    lope: 10, lopeAmt: 0.05,
+    fA: 200, fB: 900, fC: 2600, qA: 2.8, qB: 3.8, qC: 3.6,
+    turbo: 0, whine: 0.25, burble: 0.35, diesel: 0, electric: 0, red: 0.97,
+    intake: 1.55, body: 0.9,
+    gears: [3.23, 2.11, 1.50, 1.17, 0.92], finalDrive: 4.40,
+    shiftSpeeds: [14, 26, 40, 54],
   },
 };
 

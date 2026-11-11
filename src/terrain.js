@@ -21,6 +21,10 @@ export function setTerrainMap(m) { currentMap = m || 'coast'; }
 export function rawHeight(x, z, mapId = currentMap) {
   const dCity = Math.max(Math.abs(x), Math.abs(z));
   const mask = smoothstep(640, 980, dCity);
+  if (mapId === 'speedway') {
+    // Pure speed bowl: almost flat, tiny undulation so it doesn't read as a zero-poly plane
+    return 1.5 + fbm(n1, x / 900, z / 900, 3) * 2.2 * smoothstep(700, 1400, Math.max(Math.abs(x), Math.abs(z)));
+  }
   if (mapId === 'tokyo') {
     // Tokyo Night: strictly flat megacity basin (dCity <= 640 -> h = 0), wide Tokyo Bay on the east (x > 680) with Odaiba island,
     // and steep Mt. Hakone / Haruna volcanic mountains on the west and northwest.

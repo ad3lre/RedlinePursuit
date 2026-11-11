@@ -209,16 +209,20 @@ export function updateEngine(e, dt, st, now, hooks) {
 
   // Harmonic balance vs RPM / load (layout-aware). Upper harmonics (3rd/4th = ~1-2 kHz sawtooths at high RPM, then
   // through the waveshaper) are what made high revs shrill: they now fall away near redline instead of peaking there.
+  // Low gears (1–2): boost chest-grunt body and pull the whistle band harder so WOT reads as load, not pitch.
+  const lowGear = !isEv && gear <= 2;
+  const grunt = lowGear ? 1 + (gear === 1 ? 0.55 : 0.32) * (0.45 + 0.55 * thr) : 1;
   const hiLoad = (0.3 + 0.7 * thr) * clamp((effN - 0.2) / 0.8, 0, 1);
   const topTame = 1 - 0.7 * clamp((effN - 0.55) / 0.45, 0, 1) ** 1.5; // 1 at mid revs -> 0.3 at redline
+  const lowWhistle = lowGear ? (1 - 0.75 * clamp((effN - 0.35) / 0.55, 0, 1)) : 1; // mute 3rd/4th under high rpmN in 1–2
   const combGain = isEv ? 0.08 : 1; // nearly mute combustion stack for EV
-  e.gSub.gain.setTargetAtTime(pr.sub * (1.2 - effN * 0.3) * combGain, now, 0.05);
-  e.g05.gain.setTargetAtTime(pr.h05 * (0.65 + thr * 0.5) * combGain, now, 0.05);
+  e.gSub.gain.setTargetAtTime(pr.sub * (1.2 - effN * 0.3) * grunt * combGain, now, 0.05);
+  e.g05.gain.setTargetAtTime(pr.h05 * (0.65 + thr * 0.5) * grunt * combGain, now, 0.05);
   e.g1.gain.setTargetAtTime((0.6 + thr * 0.3) * combGain, now, 0.05);
   e.g15.gain.setTargetAtTime(pr.h15 * (0.5 + hiLoad * 0.5) * combGain, now, 0.05);
   e.g2.gain.setTargetAtTime(pr.h2 * (0.45 + hiLoad * 0.55) * (0.6 + 0.4 * topTame) * combGain, now, 0.05);
-  e.g3.gain.setTargetAtTime(pr.h3 * (0.2 + hiLoad * 0.6) * topTame * combGain, now, 0.05);
-  e.g4.gain.setTargetAtTime(pr.h4 * (0.1 + hiLoad * 0.5) * topTame * combGain, now, 0.05);
+  e.g3.gain.setTargetAtTime(pr.h3 * (0.2 + hiLoad * 0.6) * topTame * lowWhistle * combGain, now, 0.05);
+  e.g4.gain.setTargetAtTime(pr.h4 * (0.1 + hiLoad * 0.5) * topTame * lowWhistle * combGain, now, 0.05);
 
   // Exhaust formants track RPM + load
   e.resA.frequency.setTargetAtTime(pr.fA * (0.85 + effN * 0.55), now, 0.05);
@@ -227,12 +231,14 @@ export function updateEngine(e, dt, st, now, hooks) {
   e.resB.Q.setTargetAtTime(pr.qB, now, 0.1);
   e.resC.frequency.setTargetAtTime(pr.fC * (0.75 + effN * 0.35 + thr * 0.1), now, 0.05);
   e.resC.Q.setTargetAtTime(pr.qC, now, 0.1);
-  e.resCG.gain.setTargetAtTime((0.15 + pr.h4 * 0.55) * (0.45 + 0.55 * topTame), now, 0.1);
-  // overall brightness capped (~3.4 kHz): a real exhaust heard from the car is dominated by the low firing harmonics
-  e.filter.frequency.setTargetAtTime(Math.min(3400, 300 + thr * 1500 + effN * 1300 + (st.nitro ? 500 : 0)), now, 0.045);
-  // final tone ceiling for everything (synth formants + recordings): darker the higher the revs, so redline sounds
-  // like a hard-working engine rather than a shriek
-  e.cabinLP.frequency.setTargetAtTime((fp ? 3000 + thr * 900 : 4800) * (1 - 0.3 * clamp((effN - 0.6) / 0.4, 0, 1)), now, 0.08);
+  e.resCG.gain.setTargetAtTime((0.15 + pr.h4 * 0.55) * (0.45 + 0.55 * topTame) * lowWhistle, now, 0.1);
+  // overall brightness capped (~3.4 kHz): darker still in low gears under load
+  const brightCap = lowGear ? 2400 : 3400;
+  e.filter.frequency.setTargetAtTime(Math.min(brightCap, 300 + thr * (lowGear ? 900 : 1500) + effN * (lowGear ? 700 : 1300) + (st.nitro ? 500 : 0)), now, 0.045);
+  // final tone ceiling: low gears stay darker so revs read as grunt
+  const cabinBase = fp ? 3000 + thr * 900 : 4800;
+  const cabinDark = (1 - 0.3 * clamp((effN - 0.6) / 0.4, 0, 1)) * (lowGear ? 0.62 : 1);
+  e.cabinLP.frequency.setTargetAtTime(cabinBase * cabinDark, now, 0.08);
 
   // Real recording carries the engine's character; the synth stays underneath for body, and takes over above the
   // highest recorded RPM (where pitch-shifting a recording would sound artificial).
@@ -253,8 +259,8 @@ export function updateEngine(e, dt, st, now, hooks) {
   // Intake / exhaust noise
   e.nzG.gain.setTargetAtTime(on * pr.intake * (0.012 + thr * effN * 0.16) * (isEv ? 0.15 : 1), now, 0.06);
   e.nzF.frequency.setTargetAtTime(340 + effN * 900 + thr * 350, now, 0.07);
-  e.exG.gain.setTargetAtTime(on * (0.035 + thr * 0.12) * (1.15 - effN * 0.35) * (isEv ? 0 : 1), now, 0.06);
-  e.exF.frequency.setTargetAtTime(f * 1.55, now, 0.05);
+  e.exG.gain.setTargetAtTime(on * (0.035 + thr * 0.12) * (1.15 - effN * 0.35) * grunt * (isEv ? 0 : 1), now, 0.06);
+  e.exF.frequency.setTargetAtTime(f * (lowGear ? 1.15 : 1.55), now, 0.05);
 
   // Diesel knock pulse at half firing rate (stronger at idle / light load)
   const dAmt = on * pr.diesel * (0.05 + (1 - thr * 0.55) * 0.1) * clamp(1.15 - effN * 0.75, 0.2, 1);
@@ -275,13 +281,12 @@ export function updateEngine(e, dt, st, now, hooks) {
   const gIdx = isEv ? 0 : clamp(gear - 1, 0, ratios.length - 1);
   const mesh = ratios[gIdx] * (pr.finalDrive || 3.5);
   const shaftHz = Math.max(0, sp) * mesh * 0.55; // ~proportional to input shaft speed
-  // Low gears have the tallest ratios, so a shaft-speed whine peaked exactly when revving out a low gear. Real helical
-  // road-car gearboxes are near-silent: keep it as a faint, capped hum that fades in the low gears.
-  const wf = isEv ? (40 + sp * 22) : Math.min(700, 110 + shaftHz * 1.6 + effN * 50);
+  // Near-mute in 1–2; faint only in high gears. Cap shaft pitch so low-gear WOT can't whistle.
+  const wf = isEv ? (40 + sp * 22) : Math.min(lowGear ? 420 : 620, 110 + shaftHz * 1.6 + effN * 50);
   e.whine.frequency.setTargetAtTime(wf, now, 0.05);
   e.whine2.frequency.setTargetAtTime(wf * 2.03, now, 0.05);
   e.whineF.frequency.setTargetAtTime(wf * 1.2, now, 0.06);
-  const gearFade = isEv ? 1 : clamp((gear - 1) / 3, 0.15, 1);
+  const gearFade = isEv ? 1 : (gear <= 2 ? 0.02 : clamp((gear - 2) / 3, 0.12, 1));
   const loadWhine = (0.3 + 0.7 * Math.abs(thr - 0.3)) * clamp(sp / 50, 0, 1) * gearFade;
   e.whineG.gain.setTargetAtTime(on * loadWhine * (isEv ? 0.02 : 0.008) * pr.whine * (fp ? 1.3 : 1) * (isEv ? 0.35 : 1), now, 0.07);
 

@@ -19,7 +19,7 @@ export const MAPS = {
     name: 'TOKYO NIGHT',
     jp: '東京ナイト · 首都高湾岸線',
     desc: 'Midnight Shinjuku neon district, Wangan Bay Bridge & Hakone mountain touge.',
-    exposure: 0.72,
+    exposure: 0.62,
     night: true,
   },
   stuttgart: {
@@ -27,7 +27,7 @@ export const MAPS = {
     name: 'STUTTGART DUSK',
     jp: 'Stuttgart · Kessel & Weinberge',
     desc: 'Blue-hour over the Stuttgart basin — Schlossplatz, Fernsehturm, Neckar & vineyard hills.',
-    exposure: 0.7,
+    exposure: 0.64,
     night: true,
   },
   coast: {
@@ -36,6 +36,14 @@ export const MAPS = {
     jp: 'レッドビュー · コースト',
     desc: 'Golden-hour coastal highway loop, downtown grid & alpine canyon pass.',
     exposure: 0.62,
+    night: false,
+  },
+  speedway: {
+    id: 'speedway',
+    name: 'REDLINE SPEEDWAY',
+    jp: 'レッドライン · スピードウェイ',
+    desc: 'Long flat high-speed oval. No traffic — pure redline racing against cops & rivals.',
+    exposure: 0.78,
     night: false,
   },
 };
@@ -95,12 +103,12 @@ export class World {
     progress(0.45, 'Paving highways…');
     await nextFrame();
     this.buildRoadMeshes();
-    progress(0.58, 'Building downtown…');
+    progress(0.58, this.mapId === 'speedway' ? 'Laying infield…' : 'Building downtown…');
     await nextFrame();
     this.buildCity();
-    progress(0.75, 'Placing forests and rocks…');
+    progress(0.75, this.mapId === 'speedway' ? 'Marking barriers…' : 'Placing forests and rocks…');
     await nextFrame();
-    this.buildNature();
+    if (this.mapId !== 'speedway') this.buildNature();
     progress(0.85, 'Drawing minimap…');
     await nextFrame();
     this.buildMinimap();
@@ -185,13 +193,14 @@ export class World {
       envScene.add(new THREE.Mesh(new THREE.SphereGeometry(1000, 24, 16), domeMat));
       const g = new THREE.Mesh(new THREE.PlaneGeometry(4000, 4000), new THREE.MeshBasicMaterial({ color: 0x0c0e1c }));
       g.rotation.x = -Math.PI / 2; g.position.y = -30; envScene.add(g);
+      // Half-strength HDR bands so wet asphalt / paint env reflections don't blow out night bloom
       const neonBands = [
-        [0, 120, -420, 260, 90, 0, new THREE.Color(2.6, 0.25, 1.4)],
-        [420, 110, 0, 260, 85, Math.PI / 2, new THREE.Color(0.2, 2.1, 2.8)],
-        [0, 130, 420, 260, 95, Math.PI, new THREE.Color(1.4, 0.4, 2.6)],
-        [-420, 105, 0, 240, 80, -Math.PI / 2, new THREE.Color(2.4, 1.4, 0.25)],
-        [300, 160, -300, 180, 110, Math.PI * 0.25, new THREE.Color(0.2, 2.5, 1.6)],
-        [-300, 150, 300, 180, 110, -Math.PI * 0.75, new THREE.Color(2.8, 0.3, 0.8)],
+        [0, 120, -420, 260, 90, 0, new THREE.Color(1.3, 0.12, 0.7)],
+        [420, 110, 0, 260, 85, Math.PI / 2, new THREE.Color(0.1, 1.05, 1.4)],
+        [0, 130, 420, 260, 95, Math.PI, new THREE.Color(0.7, 0.2, 1.3)],
+        [-420, 105, 0, 240, 80, -Math.PI / 2, new THREE.Color(1.2, 0.7, 0.12)],
+        [300, 160, -300, 180, 110, Math.PI * 0.25, new THREE.Color(0.1, 1.25, 0.8)],
+        [-300, 150, 300, 180, 110, -Math.PI * 0.75, new THREE.Color(1.4, 0.15, 0.4)],
       ];
       for (const [nx, ny, nz, nw, nh, ry, nc] of neonBands) {
         const m = new THREE.Mesh(new THREE.PlaneGeometry(nw, nh), new THREE.MeshBasicMaterial({ color: nc, side: THREE.DoubleSide }));
@@ -291,8 +300,9 @@ export class World {
   updateSun(target) {
     this.focus = target;
     const dl = this.sunLight;
-    // snap to texel grid to avoid shimmering
-    const snap = (2 * 110) / 2048;
+    // snap to texel grid to avoid shimmering (frustum size comes from applyQuality)
+    const extent = dl.shadow.camera.right - dl.shadow.camera.left;
+    const snap = this._shadowSnap || (extent / Math.max(1, dl.shadow.mapSize.x));
     const tx = Math.round(target.x / snap) * snap, tz = Math.round(target.z / snap) * snap;
     dl.target.position.set(tx, target.y, tz);
     dl.position.set(tx + this.sunDir.x * 500, target.y + this.sunDir.y * 500 + 60, tz + this.sunDir.z * 500);
@@ -444,7 +454,7 @@ export class World {
       metalness: isTokyo ? 0.28 : isSt ? 0.18 : 0.1,
       normalMap: nt,
       normalScale: new THREE.Vector2(0.35, 0.35),
-      envMapIntensity: isTokyo ? 1.85 : isSt ? 1.4 : 1.2,
+      envMapIntensity: isTokyo ? 1.25 : isSt ? 1.15 : 1.2,
     });
     // anti-sparkle: ripples fade to a flat mirror with distance and roughness rises toward the horizon, so far water is calm instead of noisy
     mat.onBeforeCompile = (sh) => {
@@ -501,8 +511,8 @@ export class World {
     const A = ENV.pbr.asphalt; for (const t of [A.normalMap, A.roughnessMap, A.map]) { t.wrapS = t.wrapT = THREE.RepeatWrapping; }
     // the painted road canvas keeps lane markings; real asphalt detail (grain, cracks, normal, roughness) is multiplied in by a second UV set tiled in world metres
     const asphaltPatch = (mat, tile) => {
-      if (this.mapId === 'tokyo') { mat.metalness = 0.18; mat.envMapIntensity = 2.2; mat.color.setRGB(0.55, 0.57, 0.66); }
-      else if (this.mapId === 'stuttgart') { mat.metalness = 0.08; mat.envMapIntensity = 1.35; mat.color.setRGB(0.62, 0.6, 0.58); }
+      if (this.mapId === 'tokyo') { mat.metalness = 0.12; mat.envMapIntensity = 1.35; mat.color.setRGB(0.55, 0.57, 0.66); }
+      else if (this.mapId === 'stuttgart') { mat.metalness = 0.06; mat.envMapIntensity = 1.15; mat.color.setRGB(0.62, 0.6, 0.58); }
       mat.onBeforeCompile = (sh) => {
         sh.uniforms.tAsDiff = { value: A.map }; sh.uniforms.tAsNor = { value: A.normalMap }; sh.uniforms.tAsRough = { value: A.roughnessMap };
         sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec2 vAsUv;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvAsUv = vec2(position.x + position.z * 0.37, position.z - position.x * 0.21) / ' + tile.toFixed(1) + ';');
@@ -512,7 +522,7 @@ export class World {
           float asL = dot(asD, vec3(0.333)) * 1.9; float asL2 = dot(asD2, vec3(0.333)) * 1.9;
           float asPaint = smoothstep(0.55, 0.8, max(diffuseColor.r, max(diffuseColor.g, diffuseColor.b)));
           diffuseColor.rgb *= mix(clamp(asL * mix(0.8, 1.2, asL2 * 0.5), 0.45, 1.5), clamp(0.8 + asL * 0.25, 0.7, 1.15), asPaint);`)
-          .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n' + (this.mapId === 'tokyo' ? 'roughnessFactor = clamp(texture2D(tAsRough, vAsUv).g * 0.3 + 0.1, 0.1, 0.42);' : this.mapId === 'stuttgart' ? 'roughnessFactor = clamp(texture2D(tAsRough, vAsUv).g * 0.32 + 0.28, 0.22, 0.7);' : 'roughnessFactor = clamp(texture2D(tAsRough, vAsUv).g * 0.35 + 0.62, 0.45, 1.0);'))
+          .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n' + (this.mapId === 'tokyo' ? 'roughnessFactor = clamp(texture2D(tAsRough, vAsUv).g * 0.28 + 0.28, 0.28, 0.55);' : this.mapId === 'stuttgart' ? 'roughnessFactor = clamp(texture2D(tAsRough, vAsUv).g * 0.32 + 0.28, 0.22, 0.7);' : 'roughnessFactor = clamp(texture2D(tAsRough, vAsUv).g * 0.35 + 0.62, 0.45, 1.0);'))
           .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
           { vec3 an = texture2D(tAsNor, vAsUv).xyz * 2.0 - 1.0; normal = normalize(normal + (tbn_fake(an)) * 0.55); }`)
           .replace('void main() {', 'vec3 tbn_fake(vec3 n){ return vec3(n.x, 0.0, n.y); }\nvoid main() {');
@@ -603,7 +613,7 @@ export class World {
       emissiveIntensity: night ? (st ? 6.5 : 7.5) : 5,
     });
     const poles = new THREE.InstancedMesh(g, poleMat, cnt), heads = new THREE.InstancedMesh(head, headMat, cnt);
-    poles.castShadow = true;
+    poles.castShadow = false; // lamp heads glow; pole shadows were a dense strip tax in the sun map
     const pools = [];
     const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(1, 1, 1), up = new THREE.Vector3(0, 1, 0);
     let k = 0;
@@ -640,6 +650,9 @@ export class World {
     });
     im.renderOrder = 2;
     this.root.add(im);
+    // Additive ground pools are High-only (fill-rate tax); Med/Low rely on lamp heads
+    this.detailIMs = this.detailIMs || [];
+    this.detailIMs.push(im);
   }
 
   buildGantries() {
@@ -680,9 +693,9 @@ export class World {
     const AS = ENV.pbr.asphalt; for (const t of [AS.map, AS.normalMap, AS.roughnessMap]) { t.repeat.set(1224 / 7, 1224 / 7); t.wrapS = t.wrapT = THREE.RepeatWrapping; }
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(1224, 1224), new THREE.MeshStandardMaterial({
       map: AS.map, normalMap: AS.normalMap, normalScale: new THREE.Vector2(0.9, 0.9), roughnessMap: AS.roughnessMap,
-      roughness: this.mapId === 'tokyo' ? 0.3 : this.mapId === 'stuttgart' ? 0.55 : 1,
-      metalness: this.mapId === 'tokyo' ? 0.2 : this.mapId === 'stuttgart' ? 0.08 : 0,
-      envMapIntensity: this.mapId === 'tokyo' ? 2.2 : this.mapId === 'stuttgart' ? 1.4 : 1,
+      roughness: this.mapId === 'tokyo' ? 0.42 : this.mapId === 'stuttgart' ? 0.55 : 1,
+      metalness: this.mapId === 'tokyo' ? 0.12 : this.mapId === 'stuttgart' ? 0.06 : 0,
+      envMapIntensity: this.mapId === 'tokyo' ? 1.35 : this.mapId === 'stuttgart' ? 1.15 : 1,
       color: this.mapId === 'tokyo' ? 0x6a6c7a : this.mapId === 'stuttgart' ? 0x8a8680 : 0xd0d0d0,
     }));
     ground.rotation.x = -Math.PI / 2; ground.position.y = 0.04; ground.receiveShadow = true;
@@ -727,7 +740,8 @@ export class World {
       const d = Math.hypot(cx, cz);
       const r = rnd();
       let type = 'build';
-      if (r < 0.09 && d > 150) type = 'park'; else if (r < 0.13 && d > 150) type = 'plaza';
+      if (this.mapId === 'speedway') type = 'park'; // open infield — no skyline clutter on the speed oval
+      else if (r < 0.09 && d > 150) type = 'park'; else if (r < 0.13 && d > 150) type = 'plaza';
       if (this.mapId === 'tokyo' && Math.abs(cx - 60) < 1 && Math.abs(cz - 60) < 1) type = 'tower'; // Tokyo Tower block
       if (this.mapId === 'stuttgart' && Math.abs(cx - 60) < 1 && Math.abs(cz + 180) < 1) type = 'tower'; // Fernsehturm block
       if (this.mapId === 'stuttgart' && Math.abs(cx + 60) < 1 && Math.abs(cz + 60) < 1) type = 'plaza'; // Schlossplatz
@@ -871,6 +885,7 @@ export class World {
     });
     baseBox.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seeds, 2));
     bim.castShadow = true; bim.receiveShadow = false;
+    this.buildingIM = bim; // quality-gated in applyQuality (Med/Low skip building sun shadows)
     scene.add(bim);
 
     if (!location.search.includes('nodetail')) // ---- architectural detail layer (instanced): roof cornice + parapet, ground-floor plinth, corner piers, rooftop plant ----
@@ -905,17 +920,20 @@ export class World {
         }
       });
       cornice.count = n; plinth.count = nPl;
-      for (const im of [cornice, plinth]) { im.castShadow = true; im.receiveShadow = true; im.instanceMatrix.needsUpdate = true; if (im.instanceColor) im.instanceColor.needsUpdate = true; im.computeBoundingSphere(); scene.add(im); }
+      // Detail meshes receive only — casting every cornice/HVAC into the sun map was a large fill-rate tax
+      // Tracked so Med/Low can hide the layer (each IM is a full extra opaque pass across the skyline)
+      this.detailIMs = this.detailIMs || [];
+      for (const im of [cornice, plinth]) { im.castShadow = false; im.receiveShadow = true; im.instanceMatrix.needsUpdate = true; if (im.instanceColor) im.instanceColor.needsUpdate = true; im.computeBoundingSphere(); scene.add(im); this.detailIMs.push(im); }
       if (hvac.length) { // rooftop AC blocks with a fan stack
         const unit = mergeGeometries([box(1, 1, 1, 0.5), (() => { const g = new THREE.CylinderGeometry(0.28, 0.28, 0.5, 10); g.translate(0.15, 1.25, 0.1); return g; })()]);
         const hm = new THREE.InstancedMesh(unit, dark, hvac.length);
         hvac.forEach((u, i) => { tmpV.set(u.x, u.y, u.z); ts.set(u.w, u.h, u.d); cm.compose(tmpV, tq.identity(), ts); hm.setMatrixAt(i, cm); });
-        hm.castShadow = true; hm.computeBoundingSphere(); scene.add(hm);
+        hm.castShadow = false; hm.computeBoundingSphere(); scene.add(hm); this.detailIMs.push(hm);
       }
       if (piers.length) {
         const pm = new THREE.InstancedMesh(box(1, 1, 1, 0.5), dm, piers.length);
         piers.forEach((u, i) => { tmpV.set(u.x, 0.3, u.z); ts.set(1.1, u.h, 1.1); cm.compose(tmpV, tq.identity(), ts); pm.setMatrixAt(i, cm); cc.set(u.c).multiplyScalar(0.7); pm.setColorAt(i, cc); });
-        pm.castShadow = true; pm.receiveShadow = true; pm.instanceColor.needsUpdate = true; pm.computeBoundingSphere(); scene.add(pm);
+        pm.castShadow = false; pm.receiveShadow = true; pm.instanceColor.needsUpdate = true; pm.computeBoundingSphere(); scene.add(pm); this.detailIMs.push(pm);
       }
     }
 
@@ -940,6 +958,8 @@ export class World {
         ni.setMatrixAt(i, m4); col.setRGB(s.c[0], s.c[1], s.c[2]); ni.setColorAt(i, col);
       });
       scene.add(ni);
+      this.detailIMs = this.detailIMs || [];
+      this.detailIMs.push(ni);
     }
 
     if (this.mapId === 'tokyo') { this.buildTokyoDecor(s_tokyoSigns, lines, S, H, W, rnd); if (towerBlock) this.buildTokyoLandmarks(towerBlock, S, H, W); }
@@ -985,10 +1005,22 @@ export class World {
     const armGeo = new THREE.BoxGeometry(0.12, 0.12, 2.2); armGeo.translate(0, lampH - 0.15, 1.1);
     // perf: lamps are chunked spatially (frustum + shadow-frustum culling actually works) and distance-culled; heads stay visible further as glow points
     const armMat = new THREE.MeshStandardMaterial({ color: 0x2a2d30, metalness: 0.7, roughness: 0.5 });
-    const lampParts = [...lampP.parts.map((p) => ({ geo: p.geo, mat: p.mat, cast: true, recv: true })), { geo: armGeo, mat: armMat, cast: true }];
-    this.cityProps(lampList, lampParts, 360, 300);
-    this.cityProps(lampList, [{ geo: headGeo, mat: headMat }], 800, 400);
-    this.addLightPools(lampList.map((l) => ({ x: l.x + Math.sin(l.ang) * 2.5, z: l.z + Math.cos(l.ang) * 2.5, y: 0.08, s: 10 })));
+    // Collapse lamp GLB parts to one IM per material (was 3–5 draws × every chunk)
+    const lampByMat = new Map();
+    for (const p of lampP.parts) {
+      const k = p.mat.uuid || p.mat;
+      const slot = lampByMat.get(k) || { mat: p.mat, geos: [] };
+      slot.geos.push(p.geo); lampByMat.set(k, slot);
+    }
+    const lampParts = [...lampByMat.values()].map((s) => ({
+      geo: s.geos.length === 1 ? s.geos[0] : mergeGeometries(s.geos),
+      mat: s.mat, cast: true, recv: true,
+    }));
+    lampParts.push({ geo: armGeo, mat: armMat, cast: true });
+    this.cityProps(lampList, lampParts, 110, 320);
+    this.cityProps(lampList, [{ geo: headGeo, mat: headMat }], 150, 320);
+    // Every 3rd lamp — High-only via detailIMs (additive fill-rate)
+    this.addLightPools(lampList.filter((_, i) => i % 3 === 0).map((l) => ({ x: l.x + Math.sin(l.ang) * 2.5, z: l.z + Math.cos(l.ang) * 2.5, y: 0.08, s: 10 })));
 
     // sidewalk props (decimated Poly Haven scans): bins at every block corner, short concrete barrier runs along busy block edges
     {
@@ -1000,7 +1032,7 @@ export class World {
         binList.push({ x: px, z: pz, ang: rnd() * 6.28 });
       }
       for (const c of lines) for (let t = -H + 30; t <= H - 30; t += S) {
-        if (rnd() < 0.55) continue;
+        if (rnd() < 0.78) continue;
         const off = (rnd() < 0.5 ? -1 : 1) * (W + 1.0);
         if (Math.abs(c + off) > H - 2) continue;
         for (let k = 0; k < 3; k++) {
@@ -1008,9 +1040,19 @@ export class World {
           if (rnd() < 0.5) barList.push({ x: along, z: c + off, ang: Math.PI / 2 }); else barList.push({ x: c + off, z: along, ang: 0 });
         }
       }
-      // perf: small street furniture is chunked + culled at 220 m and does not cast into the sun shadow map (only receives)
+      // merge multi-mat scans → one draw per prop type per chunk; tighter cull
       const put = (list, prop, solid) => {
-        this.cityProps(list, prop.parts.map((p) => ({ geo: p.geo, mat: p.mat, cast: false, recv: true })), 200, 300);
+        const by = new Map();
+        for (const p of prop.parts) {
+          const k = p.mat.uuid || p.mat;
+          const slot = by.get(k) || { mat: p.mat, geos: [] };
+          slot.geos.push(p.geo); by.set(k, slot);
+        }
+        const parts = [...by.values()].map((s) => ({
+          geo: s.geos.length === 1 ? s.geos[0] : mergeGeometries(s.geos),
+          mat: s.mat, cast: false, recv: true,
+        }));
+        this.cityProps(list, parts, 120, 500);
         if (solid) for (const l of list) solid(l);
       };
       put(binList, ENV.bin, (l) => this.statics.addCircle(l.x, l.z, 0.55, 'post'));
@@ -1112,8 +1154,10 @@ export class World {
     for (const b of buckets.values()) {
       const ims = parts.map((pt) => { const im = new THREE.InstancedMesh(pt.geo, pt.mat, b.items.length); im.castShadow = !!pt.cast; im.receiveShadow = !!pt.recv; return im; });
       b.items.forEach((l, i) => { q.setFromAxisAngle(up, l.ang); m.compose(p.set(l.x, 0.3, l.z), q, one); for (const im of ims) im.setMatrixAt(i, m); });
-      for (const im of ims) { im.computeBoundingSphere(); this.root.add(im); }
-      this.cityChunks.push({ cx: b.cx, cz: b.cz, ims, d: cullDist + C * 0.71, on: true });
+      for (const im of ims) { im.computeBoundingSphere(); im.visible = false; this.root.add(im); }
+      // Start culled; first update() with focus reveals nearby chunks (avoids first-frame all-on spike)
+      // Pad by ~0.28× chunk so edges don't pop; was 0.35× and kept far lamp/bin IMs alive too long
+      this.cityChunks.push({ cx: b.cx, cz: b.cz, ims, d: cullDist + C * 0.28, on: false });
     }
   }
 
@@ -1228,7 +1272,7 @@ export class World {
         }
         const lm = new THREE.InstancedMesh(lodGeo, ENV.lodMat, bk.items.length);
         bk.items.forEach((t, i) => { q.setFromAxisAngle(up, t.rot); sc.set(t.s, yScale(t), t.s); p.set(t.x, t.h - 0.25, t.z); m4.compose(p, q, sc); lm.setMatrixAt(i, m4); lm.setColorAt(i, t.tint.clone().multiplyScalar(1.5)); });
-        lm.castShadow = false; lm.receiveShadow = true; lm.computeBoundingSphere(); this.root.add(lm); lo.push(lm);
+        lm.castShadow = false; lm.receiveShadow = true; lm.computeBoundingSphere(); lm.visible = false; this.root.add(lm); lo.push(lm);
         this.treeChunks.push({ cx: bk.cx, cz: bk.cz, hi, lo, state: -1 });
       }
     };
@@ -1247,12 +1291,12 @@ export class World {
       for (const bk of buckets.values()) {
         const ims = prop.parts.map((part) => new THREE.InstancedMesh(part.geo, part.mat, bk.items.length));
         bk.items.forEach((r, i) => { q.setFromEuler(r.e); p.set(r.x, r.h - 0.1 * r.sc.y, r.z); m4.compose(p, q, r.sc); for (const im of ims) im.setMatrixAt(i, m4); });
-        for (const im of ims) { im.castShadow = cast; im.receiveShadow = true; im.computeBoundingSphere(); this.root.add(im); }
-        if (cullDist) this.propChunks.push({ cx: bk.cx, cz: bk.cz, ims, d: cullDist, on: true });
+        for (const im of ims) { im.castShadow = cast; im.receiveShadow = true; im.computeBoundingSphere(); if (cullDist) im.visible = false; this.root.add(im); }
+        if (cullDist) this.propChunks.push({ cx: bk.cx, cz: bk.cz, ims, d: cullDist, on: false });
       }
     };
     // Small rocks receive only (dense casters); boulders still cast — both distance-culled
-    scatter(rocks.filter((r) => !r.big), ENV.rock, 300, false); scatter(rocks.filter((r) => r.big), ENV.boulder, 600, true);
+    scatter(rocks.filter((r) => !r.big), ENV.rock, 180, false); scatter(rocks.filter((r) => r.big), ENV.boulder, 320, true);
     // undergrowth: shrubs + ferns near trees (denser under broadleaf / lowland), instanced per chunk, no collision
     {
       const under = [], ferns = [];
@@ -1346,14 +1390,21 @@ export class World {
     globalUniforms.time.value = t;
     for (const u of this.updaters) u(dt, t);
     const f = this.focus;
-    if (f && this.propChunks) for (const c of this.propChunks) { const on = Math.hypot(c.cx - f.x, c.cz - f.z) < c.d + 150; if (on !== c.on) { c.on = on; for (const m of c.ims) m.visible = on; } }
+    const propPad = this.treeLodDist && this.treeLodDist < 200 ? 80 : 120;
+    if (f && this.propChunks) for (const c of this.propChunks) { const on = Math.hypot(c.cx - f.x, c.cz - f.z) < c.d + propPad; if (on !== c.on) { c.on = on; for (const m of c.ims) m.visible = on; } }
     if (f && this.cityChunks) for (const c of this.cityChunks) { const on = Math.hypot(c.cx - f.x, c.cz - f.z) < c.d; if (on !== c.on) { c.on = on; for (const m of c.ims) m.visible = on; } }
-    // tree LOD: full-detail trees only near the camera; far chunks use cheap vertex-coloured trees
+    // tree LOD: hi near / cheap lo mid / fully culled far (was leaving every lo chunk drawn across the map)
     if (f && this.treeChunks) {
       const lodR = this.treeLodDist || 330;
+      const farR = lodR * 2.4;
       for (const c of this.treeChunks) {
-        const d = Math.hypot(c.cx - f.x, c.cz - f.z), want = d < lodR ? 1 : 0;
-        if (want !== c.state) { c.state = want; for (const m of c.hi) m.visible = !!want; for (const m of c.lo) m.visible = !want; }
+        const d = Math.hypot(c.cx - f.x, c.cz - f.z);
+        const want = d < lodR ? 1 : d < farR ? 0 : -1; // 1=hi, 0=lo, -1=off
+        if (want !== c.state) {
+          c.state = want;
+          for (const m of c.hi) m.visible = want === 1;
+          for (const m of c.lo) m.visible = want === 0;
+        }
       }
     }
   }

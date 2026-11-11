@@ -82,14 +82,14 @@ const FinalShader = {
       float amt = uFx < 0.5 ? 0.0 : (uSpeed * uBlur + uNitro * 0.45 * uBlur);
       vec3 col = vec3(0.0);
       if (amt > 0.01) {
-        float st = (0.028 - 0.016 * uMB) * amt * mask;
+        float st = (0.034 - 0.016 * uMB) * amt * mask;
         float tot = 0.0;
         for (int i = 0; i < 5; i++) { float f = float(i) / 4.0; float w = 1.0 - f * 0.6; col += texture2D(tDiffuse, vUv - d * st * f).rgb * w; tot += w; }
         col /= tot;
       } else col = texture2D(tDiffuse, vUv).rgb;
       // chromatic aberration toward edges
       if (uFx > 0.5) {
-        float ca = (0.0012 + 0.0035 * amt) * mask;
+        float ca = (0.0015 + 0.0042 * amt) * mask;
         col.r = mix(col.r, texture2D(tDiffuse, vUv + d * ca * 2.0).r, 0.7);
         col.b = mix(col.b, texture2D(tDiffuse, vUv - d * ca * 2.0).b, 0.7);
       }
@@ -97,9 +97,9 @@ const FinalShader = {
       if (amt > 0.05) {
         float ang = atan(d.y, d.x);
         float lane = floor(ang * 70.0);
-        float s = step(0.965, h(vec2(lane + 300.0, mod(floor(uTime * 14.0 + lane * 0.37), 997.0))));
+        float s = step(0.955, h(vec2(lane + 300.0, mod(floor(uTime * 14.0 + lane * 0.37), 997.0))));
         float along = fract(r * 3.0 - uTime * 4.0 + h(vec2(lane, 1.0)));
-        col += mix(vec3(0.7, 0.8, 1.0), vec3(0.35, 0.65, 1.0), uNitro) * s * smoothstep(0.35, 0.9, r) * smoothstep(0.0, 0.3, along) * (1.0 - along) * amt * 0.5;
+        col += mix(vec3(0.7, 0.8, 1.0), vec3(0.35, 0.65, 1.0), uNitro) * s * smoothstep(0.35, 0.9, r) * smoothstep(0.0, 0.3, along) * (1.0 - along) * amt * 0.62;
       }
       // sun shafts (High only via uFx) — 6 taps (was 10)
       if (uFx > 1.5 && uSun.z > 0.01) {
@@ -156,7 +156,15 @@ export class Post {
   setSize(w, h) { this.composer.setSize(w, h); this.u.uRes.value.set(w, h); }
   setQuality(q) {
     this.q = q;
-    this.bloom.enabled = q > 0;
+    // Bloom is a heavy multi-pass — High only; Med/Low keep FinalShader grade without the blur pyramid
+    this.bloom.enabled = q >= 2;
+    this.bloom.radius = 0.55;
+    this.bloom.strength = 0.55;
+    if (this.bloom.setSize && q >= 2) {
+      const s = this.renderer.getSize(new THREE.Vector2());
+      const pr = this.renderer.getPixelRatio();
+      this.bloom.setSize(Math.max(1, s.x * pr), Math.max(1, s.y * pr));
+    }
     this.mb.enabled = q > 1; // motion blur only on High
     this.u.uFx.value = q; // 0/1/2 gates FinalShader cost
   }

@@ -73,7 +73,8 @@ export class CameraRig {
     const snap = this.snap; this.snap = false;
     const k = snap ? 1000 : 1;
     let fovTarget = s.fov;
-    if (s.speedFx) fovTarget += clamp((speed - 20) / 70, 0, 1) * 12 + (car.nitroActive ? 7 : 0) + this.fovKick;
+    // speed stretch: kicks in from ~36 km/h, full by ~200 km/h — mid speeds finally feel fast
+    if (s.speedFx) fovTarget += clamp((speed - 10) / 45, 0, 1) * 22 + (car.nitroActive ? 7 : 0) + this.fovKick;
     this.fovKick = damp(this.fovKick, 0, 5.5, dt);
     const mode = this.mode;
     this.updateLook(dt);
@@ -86,8 +87,10 @@ export class CameraRig {
       const yawFollow = this.lookBack ? 30 : (car.nitroActive || this.fovKick > 2 ? 6.2 : 4.2);
       this.yaw = snap ? tYaw : dampAngle(this.yaw, tYaw, yawFollow, dt);
       const far = mode === 'far';
-      const dist = (far ? 9.5 : 6.3) + clamp(speed * 0.014, 0, 1.35) + (car.nitroActive ? 0.45 : 0);
-      const h = far ? 3.4 : 2.05;
+      const spdPull = clamp(speed * 0.035, 0, 2.8);
+      const dist = (far ? 9.5 : 6.3) + spdPull + (car.nitroActive ? 0.45 : 0);
+      // drop slightly at speed so the road fills the frame and the vanishing point rushes
+      const h = (far ? 3.4 : 2.05) - clamp(speed * 0.008, 0, 0.55);
       // mouse look orbits the camera around the car
       const oYaw = this.yaw + this.lookYaw;
       const hd = dist * Math.cos(this.lookPitch);

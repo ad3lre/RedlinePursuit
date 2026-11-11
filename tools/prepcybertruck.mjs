@@ -30,27 +30,34 @@ function subset(prim, keepTri) {
   for (const sem of prim.listSemantics()) { const a = prim.getAttribute(sem), sz = a.getElementSize(), src = a.getArray(); const dst = new src.constructor(keep.length * sz); keep.forEach((v, j) => { for (let c = 0; c < sz; c++) dst[j * sz + c] = src[v * sz + c]; }); np.setAttribute(sem, doc.createAccessor().setType(a.getType()).setArray(dst).setBuffer(buffer).setNormalized(a.getNormalized())); }
   return np;
 }
-const simplify = (prim, ratio, minTris = 400) => {
-  if (ratio >= 1) return;
-  const idxA = prim.getIndices(), posA = prim.getAttribute('POSITION'); if (!idxA || idxA.getCount() / 3 < minTris) return;
-  const idx = idxA.getArray(), pos = posA.getArray(); const target = Math.max(250, Math.floor(idx.length * ratio / 3)) * 3;
-  let si;
-  try { [si] = MeshoptSimplifier.simplifySloppy(new Uint32Array(idx), pos, 3, null, target, 0.05); }
-  catch { return; }
-  if (!si || si.length < 3) return;
+const rewritePrim = (prim, si) => {
+  if (!si || si.length < 3) return false;
   const used = new Map(), ni = new Uint32Array(si.length), keep = [];
   for (let i = 0; i < si.length; i++) { let u = used.get(si[i]); if (u === undefined) { u = keep.length; used.set(si[i], u); keep.push(si[i]); } ni[i] = u; }
   for (const sem of prim.listSemantics()) { const a = prim.getAttribute(sem), sz = a.getElementSize(), src = a.getArray(); const dst = new src.constructor(keep.length * sz); keep.forEach((v, j) => { for (let c = 0; c < sz; c++) dst[j * sz + c] = src[v * sz + c]; }); prim.setAttribute(sem, doc.createAccessor().setType(a.getType()).setArray(dst).setBuffer(buffer).setNormalized(a.getNormalized())); }
   prim.setIndices(doc.createAccessor().setType('SCALAR').setArray(ni).setBuffer(buffer));
+  return true;
+};
+// Sloppy for tyres; quality+LockBorder for body (sloppy shredded door UVs into flat grey).
+const simplify = (prim, ratio, minTris = 400, { sloppy = false } = {}) => {
+  if (ratio >= 1) return;
+  const idxA = prim.getIndices(), posA = prim.getAttribute('POSITION'); if (!idxA || idxA.getCount() / 3 < minTris) return;
+  const idx = idxA.getArray(), pos = posA.getArray(); const target = Math.max(250, Math.floor(idx.length * ratio / 3)) * 3;
+  let si;
+  try {
+    if (sloppy) [si] = MeshoptSimplifier.simplifySloppy(new Uint32Array(idx), pos, 3, null, target, 0.12);
+    else [si] = MeshoptSimplifier.simplify(new Uint32Array(idx), pos, 3, target, 0.02, ['LockBorder']);
+  } catch { return; }
+  rewritePrim(prim, si);
 };
 const avgZ = (prim) => { const a = prim.getAttribute('POSITION').getArray(); let s = 0; for (let i = 2; i < a.length; i += 3) s += a[i]; return s / (a.length / 3); };
-const WR = LO ? 0.025 : 0.12;
+const WR = LO ? 0.025 : 0.08;
 for (const n of meshNodes) {
   if (!/^Cube\.(027|138)_Tire_0$/.test(n.getName())) continue;
   const prims = n.getMesh().listPrimitives(); const front = avgZ(prims[0]) > 0;
   for (const side of ['l', 'r']) {
     const wn = doc.createNode('wheel_' + (front ? 'f' : 'r') + side); const wm = doc.createMesh('w_' + wn.getName());
-    for (const p of prims) { const pos = p.getAttribute('POSITION').getArray(); const sp = subset(p, (a, b, c) => { const x = (pos[a * 3] + pos[b * 3] + pos[c * 3]) / 3; return side === 'l' ? x > 0 : x <= 0; }); simplify(sp, WR, 300); wm.addPrimitive(sp); }
+    for (const p of prims) { const pos = p.getAttribute('POSITION').getArray(); const sp = subset(p, (a, b, c) => { const x = (pos[a * 3] + pos[b * 3] + pos[c * 3]) / 3; return side === 'l' ? x > 0 : x <= 0; }); simplify(sp, WR, 300, { sloppy: true }); wm.addPrimitive(sp); }
     wn.setMesh(wm); scene.addChild(wn);
   }
   n.setMesh(null); scene.removeChild(n); n.dispose();
@@ -61,13 +68,15 @@ for (const n of root.listNodes()) {
   n.setMesh(null); scene.removeChild(n); n.dispose();
 }
 // 4. body / glass / remaining detail
+// Quality simplify on body (~0.22 → ~80–100k) keeps steel UVs; sloppy 0.4 made doors flat grey.
 for (const n of root.listNodes()) {
   if (!n.getMesh() || /^wheel_/.test(n.getName())) continue;
-  const r = LO ? 0.35 : 0.55;
   for (const p of n.getMesh().listPrimitives()) {
     const mn = p.getMaterial()?.getName() || '';
     if (/glass/i.test(mn)) continue;
-    simplify(p, /tire|wheel/i.test(mn) ? (LO ? 0.08 : 0.2) : r, 200);
+    if (/tire|wheel/i.test(mn)) { simplify(p, LO ? 0.08 : 0.2, 200, { sloppy: true }); continue; }
+    const r = LO ? 0.12 : 0.22;
+    simplify(p, r, 200);
   }
 }
 const count = () => { let t = 0; for (const m of root.listMeshes()) for (const p of m.listPrimitives()) t += tris(p); return Math.round(t); };
